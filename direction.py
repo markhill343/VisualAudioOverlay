@@ -51,15 +51,14 @@ def band_rms(data, samplerate, freq_low=20, freq_high=20000):
     return np.sqrt(mean_square)
 
 
-def stereo_angle(left_rms, right_rms):
+def stereo_angle(left_rms, right_rms, deadzone=0.08):
     """L/R balance -> angle in degrees, -90 (hard left) .. +90 (hard right).
 
-    The 0.3 exponent expands small balance differences so slightly-panned
-    sounds still visibly leave the centre of the radar.
+    Dead zone rejects small channel mismatches; this is balance, not azimuth.
     """
     balance = (right_rms - left_rms) / (right_rms + left_rms + 1e-6)
     sign = 1.0 if balance >= 0 else -1.0
-    return sign * (abs(balance) ** 0.3) * 90.0
+    return sign * max(0.0, (abs(balance) - deadzone) / (1.0 - deadzone)) * 90.0
 
 
 def surround_angle(fl, fr, c, rl, rr):

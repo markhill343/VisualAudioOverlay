@@ -23,6 +23,10 @@ class AudioCaptureThread(QThread):
         self.max_amplitude = max_amplitude  # ignore sounds louder than this (1.0 = no limit)
         self.running = True
         self.samplerate = 48000
+        self.chunk_frames = 1200  # 25 ms, shared by both capture paths.
+        self.deadzone = 0.08
+        self.noise_ratio = 1.5
+        self._noise = {}
         # When target_pid is set, capture only that program (and its children)
         # via WASAPI process loopback. None = whole-system loopback (soundcard).
         self.target_pid = target_pid
@@ -53,8 +57,10 @@ class AudioCaptureThread(QThread):
         self.gain = gain
     
     def set_freq_range(self, low, high):
-        self.freq_low = low
-        self.freq_high = high
+        low, high = sorted((low, high))
+        if (low, high) != (self.freq_low, self.freq_high):
+            self._noise.clear()
+        self.freq_low, self.freq_high = low, high
     
     def set_max_amplitude(self, max_amp):
         self.max_amplitude = max_amp
@@ -79,11 +85,12 @@ class AudioCaptureThread(QThread):
             from mono_output import MonoMixThread
             self._mono = MonoMixThread(device_name=self.mono_device,
                                        samplerate=self.samplerate)
-            self._mono.failed.connect(lambda msg: print(f"Mono output error: {msg}"))
+            self._mono.failed.connect(self.status_signal)
             self._mono.start()
             print(f"Mono output on -> {self.mono_device or 'default device'}")
         except Exception as e:
             print(f"Mono output unavailable ({e}); continuing without it.")
+            self.status_signal.emit(f"Mono output unavailable: {e}")
             self._mono = None
 
     def _feed_mono(self, data):
@@ -115,6 +122,7 @@ class AudioCaptureThread(QThread):
             cap.start()
         except Exception as e:
             print(f"Process loopback failed ({e}); using system audio.")
+            cap.close()
             self.status_signal.emit("Per-app capture failed - using system audio")
             self._run_system_loopback()
             return
@@ -124,7 +132,7 @@ class AudioCaptureThread(QThread):
         self.device_info_signal.emit(f"{label} (per-app)", 2)
         try:
             while self.running:
-                data = cap.read(2400)
+                data = cap.read(self.chunk_frames)
                 self._feed_mono(data)
                 self._process_chunk(data, use_surround=False)
         except Exception as e:
@@ -148,10 +156,18 @@ class AudioCaptureThread(QThread):
             
             # Pick device by priority
             device = None
+            if self.mono_enabled:
+                # Capture the game's cable, never the headphones replaying our mix.
+                from mono_output import detect_virtual_cable
+                cable = detect_virtual_cable()
+                device = next((lb for lb in loopbacks if cable and cable in lb.name), None)
+                if device is None:
+                    self.status_signal.emit("Mono needs game audio routed to a virtual cable; choose your game under Program")
+                    return
             try:
                 default_name = sc.default_speaker().name
                 for lb in loopbacks:
-                    if default_name in lb.name:
+                    if device is None and default_name in lb.name:
                         device = lb
                         break
             except:
@@ -167,7 +183,7 @@ class AudioCaptureThread(QThread):
                 device = loopbacks[0]
             
             print(f"Using loopback device: {device.name}")
-            self._capture_loop(device, loopbacks)
+            self._capture_loop(device, [] if self.mono_enabled else loopbacks)
 
         except Exception as e:
             print(f"Error in audio capture: {e}")
@@ -179,7 +195,7 @@ class AudioCaptureThread(QThread):
     def _capture_loop(self, device, all_loopbacks):
         try:
             with device.recorder(samplerate=self.samplerate) as mic:
-                first_data = mic.record(numframes=2400)
+                first_data = mic.record(numframes=self.chunk_frames)
                 raw_channels = first_data.shape[1]
                 
                 use_surround = False
@@ -200,7 +216,7 @@ class AudioCaptureThread(QThread):
                 self._process_chunk(first_data, use_surround)
 
                 while self.running:
-                    data = mic.record(numframes=2400)
+                    data = mic.record(numframes=self.chunk_frames)
                     self._feed_mono(data)
                     self._process_chunk(data, use_surround)
                     
@@ -225,29 +241,32 @@ class AudioCaptureThread(QThread):
                     "All audio devices failed - stop and restart the radar")
     
     def _process_chunk(self, data, use_surround):
-        # Band-limited per-channel RMS (Hann-windowed FFT + Parseval; the
-        # direction math only ever needs levels, never a filtered waveform).
-        rms = band_rms(data, self.samplerate, self.freq_low, self.freq_high) * self.gain
-
-        angle_deg = 0.0
-
-        if use_surround and data.shape[1] >= 6:
-            fl, fr, c = float(rms[0]), float(rms[1]), float(rms[2])
-            rl, rr = float(rms[4]), float(rms[5])
-            intensity = max(fl, fr, c, rl, rr)
-            if intensity > self.sensitivity and intensity < self.max_amplitude:
-                angle_deg = surround_angle(fl, fr, c, rl, rr)
-
-        elif data.shape[1] >= 2:
-            left_rms, right_rms = float(rms[0]), float(rms[1])
-            intensity = max(left_rms, right_rms)
-            if intensity > self.sensitivity and intensity < self.max_amplitude:
-                angle_deg = stereo_angle(left_rms, right_rms)
-        else:
-            intensity = float(rms[0])
-
-        if intensity > self.sensitivity and intensity < self.max_amplitude:
-            self.audio_data_signal.emit(float(angle_deg), float(intensity))
+        if data.ndim != 2 or not data.size or not np.isfinite(data).all():
+            return
+        # ponytail: three broad bands can reveal opposite-side sounds at different
+        # frequencies; overlapping sources in the same band still cannot be separated.
+        edges = sorted({self.freq_low, self.freq_high} |
+                       {f for f in (500, 2000) if self.freq_low < f < self.freq_high})
+        bands = [(self.freq_low, self.freq_high)] if use_surround else list(zip(edges, edges[1:]))
+        dt = len(data) / self.samplerate
+        for low, high in bands:
+            rms = band_rms(data, self.samplerate, low, high)
+            intensity = float(max(rms))
+            key = (low, high)
+            floor = self._noise.get(key, 0.0)
+            tau = 2.0 if intensity > floor else 0.2
+            self._noise[key] = floor + (intensity - floor) * (1 - np.exp(-dt / tau))
+            threshold = max(self.sensitivity, floor * self.noise_ratio) if self.noise_ratio else self.sensitivity
+            if intensity <= threshold or (self.max_amplitude < 1 and intensity >= self.max_amplitude):
+                continue
+            if use_surround and len(rms) >= 6:
+                angle = surround_angle(rms[0], rms[1], rms[2], rms[4], rms[5])
+            elif len(rms) >= 2:
+                angle = stereo_angle(rms[0], rms[1], self.deadzone)
+            else:
+                angle = 0.0
+            # Gain affects visibility only, never detection or loud-sound rejection.
+            self.audio_data_signal.emit(float(angle), intensity * self.gain)
 
     def stop(self):
         self.running = False
