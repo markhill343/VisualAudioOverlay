@@ -94,6 +94,29 @@ Requires **Windows 10 (build 19041+)** and **Python 3.10+**.
 
 ## Mono output (single-sided listeners)
 
+### Stereo assist and right-ear listening
+
+Stereo capture shows left/right arcs; `?` means balanced or uncertain, not a
+sound in front of you. Three frequency bands can show cues on both sides, but
+cannot separate overlapping sounds in the same band or identify enemies.
+
+- **Cue hold:** quiet detections remain visible for 200 ms by default, followed
+  by a short fade. Adjust this in Stereo Assist.
+- **Centre dead zone:** ignores small channel mismatches (default 8%).
+- **Noise suppression:** adapts to steady ambience; 0 turns it off if sustained
+  sounds are being hidden. It is a level heuristic, not footstep recognition.
+- **Visual Boost:** changes cue brightness without affecting the detection
+  threshold or loud cutoff. Lower Sensitivity to detect quieter sounds.
+- **Loud Cutoff:** 1 disables rejection. Lower values can also hide footsteps
+  mixed with loud sounds; the footstep presets still set their own cutoffs.
+
+Audio is analysed in 25 ms chunks. Actual latency also depends on Windows and
+your devices. Mono playback retains at most two queued chunks (50 ms).
+For right-ear hearing, Mono Output combines both channels into both cups, so
+the right cup receives sounds originally on either side. The radar analyses
+the stereo audio first. Use the routing steps below; keep Windows mono off.
+The app does not change Windows routing or install drivers automatically.
+
 If you are deaf or hard of hearing in one ear, you normally have to switch on the
 Windows "mono audio" setting to avoid missing sounds panned to your bad side. But
 that setting sums left and right together *before* the radar can read them, so the

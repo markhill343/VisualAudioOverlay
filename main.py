@@ -1,6 +1,7 @@
 import sys
 import json
 import os
+import math
 
 from PyQt6.QtWidgets import QApplication, QMainWindow
 from PyQt6.QtWebEngineWidgets import QWebEngineView
@@ -87,6 +88,9 @@ SOUND_PRESETS = {
 # setSensitivity divides by 10000, setGain by 10, setMaxAmp by 100 - so keep the
 # two in step. The frequency sliders are already in real Hz.
 PROFILE_SLIDER_SCALE = {
+    "deadzone": 100,
+    "noise_ratio": 10,
+    "hold_ms": 1,
     "sensitivity": 10000,
     "gain": 10,
     "max_amp": 100,
@@ -180,6 +184,11 @@ class Bridge(QObject):
     @pyqtSlot(float)
     def set_gain(self, val: float):
         self._app.set_audio_param("gain", val)
+
+    @pyqtSlot(str, float)
+    def set_stereo_option(self, key: str, value: float):
+        if key in ("deadzone", "noise_ratio", "hold_ms"):
+            self._app.set_audio_param(key, value)
 
     @pyqtSlot(int, int)
     def set_freq_range(self, low: int, high: int):
@@ -389,6 +398,9 @@ class AudioRadarApp(QMainWindow):
         # revert to "all frequencies" after the first stop/start. Defaults match
         # the dashboard's initial slider positions.
         self.audio_settings = {
+            "deadzone": 0.08,
+            "noise_ratio": 1.5,
+            "hold_ms": 200,
             "sensitivity": 0.005,   # sens slider 50 / 10000
             "gain": 1.0,            # gain slider 10 / 10
             "freq_low": 150,        # freq slider default (matches SOUND_PRESETS)
@@ -472,6 +484,8 @@ class AudioRadarApp(QMainWindow):
         self.overlay.update_audio_data(angle, intensity)
 
     def on_device_info(self, name: str, channels: int):
+        self.overlay.stereo = channels < 6
+        self.overlay.blips.clear()
         label = f"{name}  ({channels}ch)"
         self.bridge.deviceChanged.emit(label)
 
@@ -646,6 +660,9 @@ class AudioRadarApp(QMainWindow):
         self.audio_thread.set_gain(s["gain"])
         self.audio_thread.set_freq_range(s["freq_low"], s["freq_high"])
         self.audio_thread.set_max_amplitude(s["max_amp"])
+        self.audio_thread.deadzone = s["deadzone"]
+        self.audio_thread.noise_ratio = s["noise_ratio"]
+        self.overlay.hold_ms = s["hold_ms"]
 
     def _load_audio_settings(self):
         """Overlay the saved audio parameters onto the defaults. settings.json is
@@ -655,12 +672,13 @@ class AudioRadarApp(QMainWindow):
         saved = self.settings.get("audio_settings")
         if not isinstance(saved, dict):
             return
-        for key, cast in (("sensitivity", float), ("gain", float),
-                          ("freq_low", int), ("freq_high", int), ("max_amp", float)):
+        for key in self.audio_settings:
             if key in saved:
                 try:
-                    self.audio_settings[key] = cast(saved[key])
-                except (TypeError, ValueError):
+                    value = self._validated_audio_param(key, saved[key])
+                    if value is not None:
+                        self.audio_settings[key] = value
+                except (TypeError, ValueError, OverflowError):
                     pass
 
     def _queue_settings_save(self):
@@ -720,9 +738,29 @@ class AudioRadarApp(QMainWindow):
         """Update one live audio parameter. Stored on the app (so it survives a
         thread restart), applied to the running thread immediately, and queued for
         persistence so it also survives a restart."""
+        value = self._validated_audio_param(key, value)
+        if value is None:
+            return
         self.audio_settings[key] = value
         self._apply_audio_settings_to_thread()
         self._queue_settings_save()
+
+    @staticmethod
+    def _validated_audio_param(key, value):
+        limits = {"sensitivity": (0.0001, 0.05), "gain": (1, 50),
+                  "freq_low": (20, 20000), "freq_high": (20, 20000),
+                  "max_amp": (0.01, 1), "deadzone": (0, 0.4),
+                  "noise_ratio": (0, 3), "hold_ms": (100, 600)}
+        if key not in limits:
+            return None
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(value):
+            return None
+        low, high = limits[key]
+        return max(low, min(high, value))
 
     def set_selected_preset(self, name: str):
         """Remember which dropdown entry (built-in preset or saved profile) is
@@ -750,7 +788,7 @@ class AudioRadarApp(QMainWindow):
         Every parameter is overwritten, never just the ones the preset cares about
         - see the note on SOUND_PRESETS for why a partial apply leaks."""
         p = SOUND_PRESETS.get(name, SOUND_PRESETS["All Sounds"])
-        for key in self.audio_settings:
+        for key in p:
             self.audio_settings[key] = p[key]
         self._apply_audio_settings_to_thread()
         self._queue_settings_save()

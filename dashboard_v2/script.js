@@ -174,6 +174,14 @@ function onAppearanceChanged(jsonStr) {
 // Keys are optional, so a caller can push a subset.
 function onAudioSettingsChanged(jsonStr) {
     const p = JSON.parse(jsonStr);
+    for (const [key, scale] of Object.entries({deadzone: 100, noise_ratio: 10, hold_ms: 1})) {
+        if (p[key] != null) {
+            const value = Math.round(p[key] * scale);
+            setSliderValue(key, value);
+            setFill(key, value);
+            setText(key + "-val", key === "deadzone" ? value + "%" : key === "hold_ms" ? value + " ms" : value === 0 ? "Off" : (value / 10).toFixed(1) + "x");
+        }
+    }
     if (p.sensitivity != null) {
         const slider = Math.round(p.sensitivity * 10000);   // slider units = f * 10000
         setSliderValue("sensitivity", slider);
@@ -219,7 +227,7 @@ function onMonoStateChanged(jsonStr) {
     const hint = document.getElementById("mono-hint");
     if (hint) {
         const where = s.selected || (s.default ? "default device" : "default");
-        const state = s.enabled ? `On - ${where}` : "Off";
+        const state = s.enabled ? `Both channels mixed - ${where}` : "Off";
         hint.innerHTML =
             `${state} <a href="#" class="mono-setup-link" ` +
             `onclick="AR.openMonoSetup(); return false;">Setup</a>`;
@@ -353,6 +361,9 @@ window.AR = {
             freq_low: intVal("freq-low", 150),
             freq_high: intVal("freq-high", 4000),
             max_amp: intVal("max-amp", 100),
+            deadzone: intVal("deadzone", 8),
+            noise_ratio: intVal("noise_ratio", 15),
+            hold_ms: intVal("hold_ms", 200),
             preset: "Custom",
             // Richer profiles: also capture the target program, monitor, mono
             // state, and overlay appearance, so "CS2" restores everything.
@@ -401,6 +412,14 @@ window.AR = {
     setMonoEnabled(on) {
         if (bridge.set_mono_enabled) bridge.set_mono_enabled(!!on);
         if (on) AR.openMonoSetup();      // first enable: walk them through setup
+    },
+
+    setStereoOption(key, value) {
+        const scale = {deadzone: 100, noise_ratio: 10, hold_ms: 1}[key];
+        if (!scale) return;
+        const real = Number(value) / scale;
+        onAudioSettingsChanged(JSON.stringify({[key]: real}));
+        if (bridge.set_stereo_option) bridge.set_stereo_option(key, real);
     },
 
     setMonoOutput(value) {
@@ -456,6 +475,9 @@ window.AR = {
 // profile has them, so profiles saved by older versions still load fine and
 // simply leave those settings as they are.
 function applyProfileValues(p) {
+    for (const key of ["deadzone", "noise_ratio", "hold_ms"]) {
+        if (p[key] != null) AR.setStereoOption(key, p[key]);
+    }
     setSliderValue("sensitivity", p.sensitivity ?? 50);
     setSliderValue("gain", p.gain ?? 10);
     setSliderValue("max-amp", p.max_amp ?? 100);
@@ -523,17 +545,15 @@ function drawPreview() {
 
     ctx.clearRect(0, 0, W, H);
 
-    // Base circle (matches overlay: white @ ~12% alpha, 2px)
-    ctx.beginPath();
-    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-    ctx.strokeStyle = "rgba(255,255,255,0.18)";
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    ctx.fillStyle = "rgba(255,255,255,0.6)";
+    ctx.font = "12px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("LEFT     ?     RIGHT", cx, cy + 30);
 
     // Sample blip arc
     const accent = document.getElementById("accent-color")?.value || "#9751F2";
     const thickness = parseInt(document.getElementById("thickness")?.value || 6);
-    const sampleAngleDeg = -35;             // up-and-to-the-right, like the mockup
+    const sampleAngleDeg = -90;             // left-side stereo cue
     const spanDeg = 35;
     // canvas 0° = +x axis, clockwise; overlay angle 0 = up. Convert:
     const centerDeg = -90 + sampleAngleDeg;

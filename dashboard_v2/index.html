@@ -90,7 +90,7 @@
                         <div class="control">
                             <div class="control-head">
                                 <img src="icons/Volume_Max.svg" class="icon" alt="">
-                                <span>Gain / Boost</span>
+                                <span>Visual Boost</span>
                                 <span class="value" id="gain-val">1.0x</span>
                             </div>
                             <input type="range" class="slider" id="gain" min="10" max="500" value="10"
@@ -142,7 +142,7 @@
                         <div class="control">
                             <div class="control-head">
                                 <img src="icons/Volume_Max.svg" class="icon" alt="">
-                                <span>Max Amplitude</span>
+                                <span>Loud Cutoff (1 = off)</span>
                                 <span class="value" id="max-amp-val">1.00</span>
                             </div>
                             <input type="range" class="slider" id="max-amp" min="1" max="100" value="100"
@@ -176,6 +176,25 @@
         </div>
 
         <!-- ── CUSTOMIZATION ─────────────────────────────────────── -->
+        <section class="card stereo-controls">
+            <h2 class="card-title">STEREO ASSIST</h2>
+            <p class="device-sub">Left and right arcs show sound balance. ? means balanced or uncertain, never front/back. Both arcs can appear for different frequency bands.</p>
+            <div class="stereo-grid">
+                <div class="control">
+                    <label class="control-head" for="deadzone">Centre dead zone <span id="deadzone-val">8%</span></label>
+                    <input type="range" class="slider" id="deadzone" min="0" max="40" value="8" oninput="AR.setStereoOption('deadzone', this.value)">
+                </div>
+                <div class="control">
+                    <label class="control-head" for="noise_ratio">Noise suppression <span id="noise_ratio-val">1.5x</span></label>
+                    <input type="range" class="slider" id="noise_ratio" min="0" max="30" value="15" oninput="AR.setStereoOption('noise_ratio', this.value)">
+                    <p class="device-sub">0 = off. Higher values hide more steady ambience, but may hide sustained cues.</p>
+                </div>
+                <div class="control">
+                    <label class="control-head" for="hold_ms">Cue hold <span id="hold_ms-val">200 ms</span></label>
+                    <input type="range" class="slider" id="hold_ms" min="100" max="600" step="25" value="200" oninput="AR.setStereoOption('hold_ms', this.value)">
+                </div>
+            </div>
+        </section>
         <section class="card card--custom">
             <h2 class="card-title">CUSTOMIZATION</h2>
 
@@ -296,8 +315,9 @@
         <div class="modal-card">
             <h2 id="mono-modal-title" class="modal-title">Mono Output Setup</h2>
             <p class="modal-intro">
-                Hear the whole game through your working ear while the radar still
-                shows direction. AudioRadar does the mono mix for you, so you turn
+                Hear left and right game sounds through your right ear: Mono Output
+                sends their combined mix to both headphone cups, including the right.
+                The radar analyses stereo before mixing. Turn
                 <b>off</b> the Windows "mono audio" setting (leaving it on hides the
                 direction the overlay needs). Follow the 5 steps below once.
             </p>
