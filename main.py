@@ -2,6 +2,8 @@ import sys
 import json
 import os
 import math
+import ctypes
+from ctypes import wintypes
 
 from PyQt6.QtWidgets import QApplication, QMainWindow
 from PyQt6.QtWebEngineWidgets import QWebEngineView
@@ -91,6 +93,8 @@ PROFILE_SLIDER_SCALE = {
     "deadzone": 100,
     "noise_ratio": 10,
     "hold_ms": 1,
+    "left_size": 100,
+    "left_hold_ms": 1,
     "sensitivity": 10000,
     "gain": 10,
     "max_amp": 100,
@@ -177,6 +181,14 @@ class Bridge(QObject):
         self._app.stop_radar()
 
     # ── Audio Settings ────────────────────────────────────────────────
+    @pyqtSlot()
+    def toggle_overlay(self):
+        self._app.toggle_overlay()
+
+    @pyqtSlot(result=str)
+    def get_hotkey_status(self):
+        return self._app.hotkey_status
+
     @pyqtSlot(float)
     def set_sensitivity(self, val: float):
         self._app.set_audio_param("sensitivity", val)
@@ -187,7 +199,7 @@ class Bridge(QObject):
 
     @pyqtSlot(str, float)
     def set_stereo_option(self, key: str, value: float):
-        if key in ("deadzone", "noise_ratio", "hold_ms"):
+        if key in ("deadzone", "noise_ratio", "hold_ms", "left_size", "left_hold_ms"):
             self._app.set_audio_param(key, value)
 
     @pyqtSlot(int, int)
@@ -401,6 +413,8 @@ class AudioRadarApp(QMainWindow):
             "deadzone": 0.08,
             "noise_ratio": 1.5,
             "hold_ms": 200,
+            "left_size": 1.5,
+            "left_hold_ms": 150,
             "sensitivity": 0.005,   # sens slider 50 / 10000
             "gain": 1.0,            # gain slider 10 / 10
             "freq_low": 150,        # freq slider default (matches SOUND_PRESETS)
@@ -476,12 +490,16 @@ class AudioRadarApp(QMainWindow):
         self.update_thread = UpdateCheckThread()
         self.update_thread.updateFound.connect(self.bridge.updateAvailable)
         self.update_thread.start()
+        self._hotkey_hwnd = None
+        self.hotkey_status = "Ctrl+Alt+H: registering shortcut"
+        QTimer.singleShot(0, self._register_hotkey)
 
     # ── Audio Callbacks ───────────────────────────────────────────────
     def on_audio_data(self, angle: float, intensity: float):
         if self.invert_direction:
             angle = -angle
-        self.overlay.update_audio_data(angle, intensity)
+        if self.overlay.isVisible():
+            self.overlay.update_audio_data(angle, intensity)
 
     def on_device_info(self, name: str, channels: int):
         self.overlay.stereo = channels < 6
@@ -663,6 +681,8 @@ class AudioRadarApp(QMainWindow):
         self.audio_thread.deadzone = s["deadzone"]
         self.audio_thread.noise_ratio = s["noise_ratio"]
         self.overlay.hold_ms = s["hold_ms"]
+        self.overlay.left_size = s["left_size"]
+        self.overlay.left_hold_ms = s["left_hold_ms"]
 
     def _load_audio_settings(self):
         """Overlay the saved audio parameters onto the defaults. settings.json is
@@ -750,7 +770,8 @@ class AudioRadarApp(QMainWindow):
         limits = {"sensitivity": (0.0001, 0.05), "gain": (1, 50),
                   "freq_low": (20, 20000), "freq_high": (20, 20000),
                   "max_amp": (0.01, 1), "deadzone": (0, 0.4),
-                  "noise_ratio": (0, 3), "hold_ms": (100, 600)}
+                  "noise_ratio": (0, 3), "hold_ms": (100, 600),
+                  "left_size": (1, 3), "left_hold_ms": (0, 600)}
         if key not in limits:
             return None
         try:
@@ -942,7 +963,41 @@ class AudioRadarApp(QMainWindow):
             json.dump(self.settings, f, indent=2)
 
     # ── Lifecycle ─────────────────────────────────────────────────────
+    def _register_hotkey(self):
+        self._hotkey_hwnd = None
+        self.hotkey_status = "Global shortcut unavailable on this platform"
+        if sys.platform == "win32":
+            hwnd = wintypes.HWND(int(self.winId()))
+            # Ctrl+Alt+H, MOD_NOREPEAT: holding the keys only toggles once.
+            if ctypes.windll.user32.RegisterHotKey(hwnd, 1, 0x4003, ord("H")):
+                self._hotkey_hwnd = hwnd
+                self.hotkey_status = "Ctrl+Alt+H: show / hide overlay"
+            else:
+                self.hotkey_status = "Ctrl+Alt+H unavailable (already in use). Use Show / Hide."
+
+    def nativeEvent(self, event_type, message):
+        if sys.platform == "win32":
+            msg = wintypes.MSG.from_address(int(message))
+            if msg.message == 0x0312 and msg.wParam == 1:
+                self.toggle_overlay()
+                return True, 0
+        return False, 0
+
+    def toggle_overlay(self):
+        if not self.radar_active:
+            return
+        visible = self.overlay.isVisible()
+        self.overlay.set_drag_enabled(False)
+        self.overlay.blips.clear()
+        self.overlay.setVisible(not visible)
+        self.emit_overlay_position()
+        self.bridge.statusChanged.emit(
+            "Overlay hidden - audio continues" if visible else "Overlay visible - audio continues", True)
+
     def closeEvent(self, event):
+        if self._hotkey_hwnd is not None:
+            ctypes.windll.user32.UnregisterHotKey(self._hotkey_hwnd, 1)
+            self._hotkey_hwnd = None
         self._flush_pending_saves()
         try:
             self.stop_radar()

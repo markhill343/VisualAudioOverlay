@@ -68,6 +68,7 @@ function initBridge() {
                 bridge.get_app_version(function (v) { setText("footer-version", "v" + v); });
             }
 
+            bridge.get_hotkey_status(v => setText("hotkey-status", v));
             bridge.request_initial_data();
 
             // The Program list only contains apps that are currently playing audio.
@@ -174,14 +175,15 @@ function onAppearanceChanged(jsonStr) {
 // Keys are optional, so a caller can push a subset.
 function onAudioSettingsChanged(jsonStr) {
     const p = JSON.parse(jsonStr);
-    for (const [key, scale] of Object.entries({deadzone: 100, noise_ratio: 10, hold_ms: 1})) {
+    for (const [key, scale] of Object.entries({deadzone: 100, noise_ratio: 10, hold_ms: 1, left_size: 100, left_hold_ms: 1})) {
         if (p[key] != null) {
             const value = Math.round(p[key] * scale);
             setSliderValue(key, value);
             setFill(key, value);
-            setText(key + "-val", key === "deadzone" ? value + "%" : key === "hold_ms" ? value + " ms" : value === 0 ? "Off" : (value / 10).toFixed(1) + "x");
+            setText(key + "-val", key === "deadzone" ? value + "%" : key.endsWith("ms") ? value + " ms" : key === "left_size" ? (value / 100).toFixed(1) + "x" : value === 0 ? "Off" : (value / 10).toFixed(1) + "x");
         }
     }
+    if (p.left_size != null) drawPreview();
     if (p.sensitivity != null) {
         const slider = Math.round(p.sensitivity * 10000);   // slider units = f * 10000
         setSliderValue("sensitivity", slider);
@@ -364,6 +366,8 @@ window.AR = {
             deadzone: intVal("deadzone", 8),
             noise_ratio: intVal("noise_ratio", 15),
             hold_ms: intVal("hold_ms", 200),
+            left_size: intVal("left_size", 150),
+            left_hold_ms: intVal("left_hold_ms", 150),
             preset: "Custom",
             // Richer profiles: also capture the target program, monitor, mono
             // state, and overlay appearance, so "CS2" restores everything.
@@ -415,7 +419,7 @@ window.AR = {
     },
 
     setStereoOption(key, value) {
-        const scale = {deadzone: 100, noise_ratio: 10, hold_ms: 1}[key];
+        const scale = {deadzone: 100, noise_ratio: 10, hold_ms: 1, left_size: 100, left_hold_ms: 1}[key];
         if (!scale) return;
         const real = Number(value) / scale;
         onAudioSettingsChanged(JSON.stringify({[key]: real}));
@@ -475,7 +479,7 @@ window.AR = {
 // profile has them, so profiles saved by older versions still load fine and
 // simply leave those settings as they are.
 function applyProfileValues(p) {
-    for (const key of ["deadzone", "noise_ratio", "hold_ms"]) {
+    for (const key of ["deadzone", "noise_ratio", "hold_ms", "left_size", "left_hold_ms"]) {
         if (p[key] != null) AR.setStereoOption(key, p[key]);
     }
     setSliderValue("sensitivity", p.sensitivity ?? 50);
@@ -554,7 +558,7 @@ function drawPreview() {
     const accent = document.getElementById("accent-color")?.value || "#9751F2";
     const thickness = parseInt(document.getElementById("thickness")?.value || 6);
     const sampleAngleDeg = -90;             // left-side stereo cue
-    const spanDeg = 35;
+    const spanDeg = 35 * (Number(document.getElementById("left_size")?.value || 150) / 100);
     // canvas 0° = +x axis, clockwise; overlay angle 0 = up. Convert:
     const centerDeg = -90 + sampleAngleDeg;
     const start = (centerDeg - spanDeg / 2) * Math.PI / 180;
@@ -563,7 +567,7 @@ function drawPreview() {
     ctx.beginPath();
     ctx.arc(cx, cy, radius, start, end);
     ctx.strokeStyle = accent;
-    ctx.lineWidth = thickness;
+    ctx.lineWidth = thickness * (Number(document.getElementById("left_size")?.value || 150) / 100);
     ctx.lineCap = "round";
     ctx.stroke();
 }

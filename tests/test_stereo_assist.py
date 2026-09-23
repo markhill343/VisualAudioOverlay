@@ -69,6 +69,9 @@ def test_stereo_detection_display_and_right_ear_mix():
         assert len(radar.blips) == 3
     with patch("overlay.time.monotonic", return_value=10.36):
         radar.decay_signal()
+        assert [b["angle"] for b in radar.blips] == [-90]
+    with patch("overlay.time.monotonic", return_value=10.51):
+        radar.decay_signal()
         assert not radar.blips
 
     mono = MonoMixThread()
@@ -81,6 +84,12 @@ def test_stereo_detection_display_and_right_ear_mix():
     assert mono._q.get_nowait()[0, 0] == 3  # Old playback is dropped.
     assert AudioRadarApp._validated_audio_param("deadzone", float("nan")) is None
     assert AudioRadarApp._validated_audio_param("deadzone", 9) == 0.4
+    assert AudioRadarApp._validated_audio_param("left_size", 9) == 3
+    radar.left_hold_ms = 0
+    with patch("overlay.time.monotonic", return_value=20):
+        radar.update_audio_data(-90, 0.01)
+        radar.update_audio_data(90, 0.01)
+    assert radar.blips[0]['expires'] == radar.blips[1]['expires']
 
     # Mono failures reach the UI across real worker threads.
     statuses = []
@@ -102,4 +111,36 @@ def test_stereo_detection_display_and_right_ear_mix():
          patch.object(capture, "_capture_loop") as record:
         capture._run_system_loopback()
         record.assert_called_once_with(cable, [])
+    radar.close()
+
+
+def test_hotkey_hides_only_visuals_and_ignores_key_repeat():
+    import ctypes
+    from ctypes import wintypes
+    from unittest.mock import Mock
+    app = QApplication.instance() or QApplication([])
+    radar = OverlayRadar()
+    radar.show()
+    host = SimpleNamespace(radar_active=True, overlay=radar,
+                           bridge=SimpleNamespace(statusChanged=Mock()),
+                           emit_overlay_position=Mock(), winId=lambda: 123)
+    host.toggle_overlay = lambda: AudioRadarApp.toggle_overlay(host)
+    with patch("main.ctypes.windll.user32.RegisterHotKey", return_value=1) as register:
+        AudioRadarApp._register_hotkey(host)
+        assert register.call_args.args[2:] == (0x4003, ord('H'))
+    msg = wintypes.MSG()
+    msg.message, msg.wParam = 0x0312, 1
+    assert AudioRadarApp.nativeEvent(host, b'windows_generic_MSG', ctypes.addressof(msg)) == (True, 0)
+    assert not radar.isVisible() and host.radar_active
+    msg.message = 0x000F  # Ordinary paint messages must pass through untouched.
+    assert AudioRadarApp.nativeEvent(host, b'windows_generic_MSG', ctypes.addressof(msg)) == (False, 0)
+    host.toggle_overlay()
+    assert radar.isVisible()
+    host.radar_active = False
+    radar.hide()
+    host.toggle_overlay()
+    assert not radar.isVisible()
+    with patch("main.ctypes.windll.user32.RegisterHotKey", return_value=0):
+        AudioRadarApp._register_hotkey(host)
+        assert host._hotkey_hwnd is None and "already in use" in host.hotkey_status
     radar.close()

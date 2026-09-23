@@ -103,6 +103,12 @@ cannot separate overlapping sounds in the same band or identify enemies.
 - **Cue hold:** quiet detections remain visible for 200 ms by default, followed
   by a short fade. Adjust this in Stereo Assist.
 - **Centre dead zone:** ignores small channel mismatches (default 8%).
+- **Left cue size / Extra left hold:** independently emphasize the side you
+  cannot hear. Defaults are 1.5x size and 150 ms extra hold; 1x and 0 ms disable
+  the emphasis. Both controls are saved with your settings and profiles.
+- **Ctrl+Alt+H:** globally show/hide the active overlay without stopping capture
+  or mono playback. Start the radar first. A Show / Hide button is also available;
+  the dashboard reports if another application already owns the shortcut.
 - **Noise suppression:** adapts to steady ambience; 0 turns it off if sustained
   sounds are being hidden. It is a level heuristic, not footstep recognition.
 - **Visual Boost:** changes cue brightness without affecting the detection

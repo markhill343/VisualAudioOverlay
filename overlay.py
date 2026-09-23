@@ -24,6 +24,7 @@ class OverlayRadar(QWidget):
         self.drag_start_window = None
         self._apply_window_flags()
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         
         self.resize(300, 300)
         
@@ -35,6 +36,8 @@ class OverlayRadar(QWidget):
         self.blips = []
         self.stereo = True
         self.hold_ms = 200
+        self.left_size = 1.5
+        self.left_hold_ms = 150
         
         # Started/stopped with visibility (show/hideEvent) so the 30ms repaint
         # tick doesn't keep running while the overlay is hidden.
@@ -157,7 +160,7 @@ class OverlayRadar(QWidget):
         clamped_intensity = max(0.45, min(1.0, intensity * visual_gain))
         if self.stereo:
             angle = -90.0 if angle < 0 else 90.0 if angle > 0 else 0.0
-        expires = time.monotonic() + self.hold_ms / 1000 + 0.15
+        expires = time.monotonic() + (self.hold_ms + (self.left_hold_ms if angle < 0 else 0)) / 1000 + 0.15
         
         found = False
         for blip in self.blips:
@@ -211,7 +214,8 @@ class OverlayRadar(QWidget):
                 opacity
             )
             pen = QPen(arc_color)
-            pen.setWidth(self.stroke_width)
+            emphasis = self.left_size if blip["angle"] < 0 else 1
+            pen.setWidthF(self.stroke_width * emphasis)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             painter.setPen(pen)
             if self.stereo and blip['angle'] == 0:
@@ -222,7 +226,7 @@ class OverlayRadar(QWidget):
                 continue
             
             center_pyqt_angle = 90 - blip['angle']
-            span_degrees = 35
+            span_degrees = 35 * emphasis
             start_deg = center_pyqt_angle - (span_degrees / 2)
             
             start_angle_16 = int(start_deg * 16)
