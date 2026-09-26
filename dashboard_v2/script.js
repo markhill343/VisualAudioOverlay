@@ -51,6 +51,7 @@ function initBridge() {
 
             bridge.statusChanged.connect(onStatusChanged);
             bridge.deviceChanged.connect(onDeviceChanged);
+            bridge.captureModeChanged.connect(v => setText("capture-mode", v));
             bridge.profilesChanged.connect(onProfilesChanged);
             bridge.monitorsChanged.connect(onMonitorsChanged);
             bridge.presetsChanged.connect(onPresetsChanged);
@@ -175,6 +176,7 @@ function onAppearanceChanged(jsonStr) {
 // Keys are optional, so a caller can push a subset.
 function onAudioSettingsChanged(jsonStr) {
     const p = JSON.parse(jsonStr);
+    if (p.stereo_mode != null) document.getElementById("stereo-mode").checked = !!p.stereo_mode;
     for (const [key, scale] of Object.entries({deadzone: 100, noise_ratio: 10, hold_ms: 1, left_size: 100, left_hold_ms: 1})) {
         if (p[key] != null) {
             const value = Math.round(p[key] * scale);
@@ -366,6 +368,7 @@ window.AR = {
             deadzone: intVal("deadzone", 8),
             noise_ratio: intVal("noise_ratio", 15),
             hold_ms: intVal("hold_ms", 200),
+            stereo_mode: document.getElementById("stereo-mode").checked ? 1 : 0,
             left_size: intVal("left_size", 150),
             left_hold_ms: intVal("left_hold_ms", 150),
             preset: "Custom",
@@ -419,7 +422,7 @@ window.AR = {
     },
 
     setStereoOption(key, value) {
-        const scale = {deadzone: 100, noise_ratio: 10, hold_ms: 1, left_size: 100, left_hold_ms: 1}[key];
+        const scale = {deadzone: 100, noise_ratio: 10, hold_ms: 1, left_size: 100, left_hold_ms: 1, stereo_mode: 1}[key];
         if (!scale) return;
         const real = Number(value) / scale;
         onAudioSettingsChanged(JSON.stringify({[key]: real}));
@@ -479,7 +482,7 @@ window.AR = {
 // profile has them, so profiles saved by older versions still load fine and
 // simply leave those settings as they are.
 function applyProfileValues(p) {
-    for (const key of ["deadzone", "noise_ratio", "hold_ms", "left_size", "left_hold_ms"]) {
+    for (const key of ["deadzone", "noise_ratio", "hold_ms", "left_size", "left_hold_ms", "stereo_mode"]) {
         if (p[key] != null) AR.setStereoOption(key, p[key]);
     }
     setSliderValue("sensitivity", p.sensitivity ?? 50);

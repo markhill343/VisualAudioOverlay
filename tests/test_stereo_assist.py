@@ -144,3 +144,45 @@ def test_hotkey_hides_only_visuals_and_ignores_key_repeat():
         AudioRadarApp._register_hotkey(host)
         assert host._hotkey_hwnd is None and "already in use" in host.hotkey_status
     radar.close()
+
+
+def test_stereo_switch_surround_and_silent_start():
+    from unittest.mock import Mock, MagicMock
+    capture = AudioCaptureThread(freq_low=20, freq_high=20000)
+    capture.noise_ratio = 0
+    events, devices = [], []
+    capture.audio_data_signal.connect(lambda a, i: events.append((a, i)))
+    capture.device_info_signal.connect(lambda name, channels: devices.append(channels))
+    t = np.arange(1200) / 48000
+    data = np.zeros((1200, 8))
+    data[:, 4] = np.sin(2 * np.pi * 240 * t) * 0.1
+    capture._process_chunk(data, True)
+    assert events[-1][0] == pytest.approx(-135)
+    events.clear()
+    capture._process_chunk(data, False)
+    assert events and all(-90 <= a < 0 for a, _ in events)
+    data[:, 4] = 0
+    data[:, 6] = np.sin(2 * np.pi * 240 * t) * 0.1
+    events.clear()
+    capture._process_chunk(data, True)
+    assert events[-1][0] == pytest.approx(-90)
+    data[:, 6] = 0
+    data[:, 3] = 0.5
+    events.clear()
+    capture._process_chunk(data, True)
+    assert not events  # Subwoofer-only audio has no bearing.
+    for forced, raw_channels, expected in [(False, 8, 8), (True, 8, 2), (False, 2, 2)]:
+        capture.force_stereo = forced
+        capture.running = False
+        device = SimpleNamespace(name='Test output', recorder=MagicMock())
+        device.recorder.return_value.__enter__.return_value.record.return_value = np.zeros((1200, raw_channels))
+        capture._capture_loop(device, [])
+        assert devices[-1] == expected  # Silence must not permanently select stereo.
+    host = SimpleNamespace(audio_settings={'stereo_mode': 1},
+                           _validated_audio_param=AudioRadarApp._validated_audio_param,
+                           _apply_audio_settings_to_thread=Mock(), _queue_settings_save=Mock(),
+                           _restart_capture_if_active=Mock())
+    AudioRadarApp.set_audio_param(host, 'stereo_mode', 0)
+    host._restart_capture_if_active.assert_called_once()
+    AudioRadarApp.set_audio_param(host, 'stereo_mode', 0)
+    host._restart_capture_if_active.assert_called_once()

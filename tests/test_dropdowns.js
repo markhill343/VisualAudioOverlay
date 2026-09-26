@@ -186,6 +186,10 @@ W.onMonoStateChanged(JSON.stringify({ devices: ["Headphones", "CABLE Input"], de
 check("named device selected", mono.value === "CABLE Input", mono.value);
 
 section("stereo settings");
+W.onAudioSettingsChanged(JSON.stringify({stereo_mode: 0}));
+check("stereo toggle restores off", els['stereo-mode'].checked === false);
+W.onAudioSettingsChanged(JSON.stringify({stereo_mode: 1}));
+check("stereo toggle restores on", els['stereo-mode'].checked === true);
 W.onAudioSettingsChanged(JSON.stringify({deadzone: 0.12, noise_ratio: 0, hold_ms: 275}));
 check("dead zone restored in percent", Number(els.deadzone.value) === 12);
 check("noise suppression can be off", els['noise_ratio-val'].textContent === "Off");

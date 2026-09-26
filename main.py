@@ -93,6 +93,7 @@ PROFILE_SLIDER_SCALE = {
     "deadzone": 100,
     "noise_ratio": 10,
     "hold_ms": 1,
+    "stereo_mode": 1,
     "left_size": 100,
     "left_hold_ms": 1,
     "sensitivity": 10000,
@@ -155,6 +156,7 @@ class UpdateCheckThread(QThread):
 class Bridge(QObject):
     # Signals → pushed to JS
     statusChanged   = pyqtSignal(str, bool)   # (message, isActive)
+    captureModeChanged = pyqtSignal(str)
     deviceChanged   = pyqtSignal(str)          # detected device name
     profilesChanged = pyqtSignal(str)          # full profiles dict as JSON
     monitorsChanged = pyqtSignal(str)          # list of monitors as JSON
@@ -199,7 +201,7 @@ class Bridge(QObject):
 
     @pyqtSlot(str, float)
     def set_stereo_option(self, key: str, value: float):
-        if key in ("deadzone", "noise_ratio", "hold_ms", "left_size", "left_hold_ms"):
+        if key in ("deadzone", "noise_ratio", "hold_ms", "left_size", "left_hold_ms", "stereo_mode"):
             self._app.set_audio_param(key, value)
 
     @pyqtSlot(int, int)
@@ -413,6 +415,7 @@ class AudioRadarApp(QMainWindow):
             "deadzone": 0.08,
             "noise_ratio": 1.5,
             "hold_ms": 200,
+            "stereo_mode": 1,
             "left_size": 1.5,
             "left_hold_ms": 150,
             "sensitivity": 0.005,   # sens slider 50 / 10000
@@ -506,6 +509,10 @@ class AudioRadarApp(QMainWindow):
         self.overlay.blips.clear()
         label = f"{name}  ({channels}ch)"
         self.bridge.deviceChanged.emit(label)
+        self.bridge.captureModeChanged.emit(
+            "Stereo L/R (forced)" if self.audio_settings["stereo_mode"] else
+            "Surround channel estimate" if channels >= 6 else
+            "Stereo fallback: captured source has no surround channels")
 
     def on_capture_status(self, message: str):
         """Capture-thread problems (device lost, fallback taken) surfaced on the
@@ -678,6 +685,7 @@ class AudioRadarApp(QMainWindow):
         self.audio_thread.set_gain(s["gain"])
         self.audio_thread.set_freq_range(s["freq_low"], s["freq_high"])
         self.audio_thread.set_max_amplitude(s["max_amp"])
+        self.audio_thread.force_stereo = bool(s["stereo_mode"])
         self.audio_thread.deadzone = s["deadzone"]
         self.audio_thread.noise_ratio = s["noise_ratio"]
         self.overlay.hold_ms = s["hold_ms"]
@@ -761,9 +769,12 @@ class AudioRadarApp(QMainWindow):
         value = self._validated_audio_param(key, value)
         if value is None:
             return
+        changed = value != self.audio_settings[key]
         self.audio_settings[key] = value
         self._apply_audio_settings_to_thread()
         self._queue_settings_save()
+        if key == "stereo_mode" and changed:
+            self._restart_capture_if_active()
 
     @staticmethod
     def _validated_audio_param(key, value):
@@ -771,7 +782,7 @@ class AudioRadarApp(QMainWindow):
                   "freq_low": (20, 20000), "freq_high": (20, 20000),
                   "max_amp": (0.01, 1), "deadzone": (0, 0.4),
                   "noise_ratio": (0, 3), "hold_ms": (100, 600),
-                  "left_size": (1, 3), "left_hold_ms": (0, 600)}
+                  "left_size": (1, 3), "left_hold_ms": (0, 600), "stereo_mode": (0, 1)}
         if key not in limits:
             return None
         try:
@@ -781,6 +792,8 @@ class AudioRadarApp(QMainWindow):
         if not math.isfinite(value):
             return None
         low, high = limits[key]
+        if key == "stereo_mode":
+            return int(value >= 0.5)
         return max(low, min(high, value))
 
     def set_selected_preset(self, name: str):

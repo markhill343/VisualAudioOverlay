@@ -24,6 +24,7 @@ class AudioCaptureThread(QThread):
         self.running = True
         self.samplerate = 48000
         self.chunk_frames = 1200  # 25 ms, shared by both capture paths.
+        self.force_stereo = True
         self.deadzone = 0.08
         self.noise_ratio = 1.5
         self._noise = {}
@@ -198,15 +199,8 @@ class AudioCaptureThread(QThread):
                 first_data = mic.record(numframes=self.chunk_frames)
                 raw_channels = first_data.shape[1]
                 
-                use_surround = False
-                if raw_channels >= 6:
-                    surround_max = max(
-                        float(np.max(np.abs(first_data[:, ch])))
-                        for ch in range(2, min(raw_channels, 6))
-                    )
-                    if surround_max > 0.0001:
-                        use_surround = True
-                
+                use_surround = raw_channels >= 6 and not self.force_stereo
+
                 effective = raw_channels if use_surround else min(raw_channels, 2)
                 mode = "360° Surround" if use_surround else "Stereo L/R"
                 print(f"Channels: {raw_channels} | Mode: {mode}")
@@ -243,6 +237,14 @@ class AudioCaptureThread(QThread):
     def _process_chunk(self, data, use_surround):
         if data.ndim != 2 or not data.size or not np.isfinite(data).all():
             return
+        if not use_surround and data.shape[1] >= 6:
+            # Windows 5.1/7.1 order: FL FR C LFE BL BR [SL SR]. Omit LFE.
+            left = data[:, 0] + 0.707 * (data[:, 2] + data[:, 4])
+            right = data[:, 1] + 0.707 * (data[:, 2] + data[:, 5])
+            if data.shape[1] >= 8:
+                left = left + 0.707 * data[:, 6]
+                right = right + 0.707 * data[:, 7]
+            data = np.column_stack((left, right))
         # ponytail: three broad bands can reveal opposite-side sounds at different
         # frequencies; overlapping sources in the same band still cannot be separated.
         edges = sorted({self.freq_low, self.freq_high} |
@@ -251,6 +253,9 @@ class AudioCaptureThread(QThread):
         dt = len(data) / self.samplerate
         for low, high in bands:
             rms = band_rms(data, self.samplerate, low, high)
+            if use_surround and len(rms) >= 6:
+                rms = rms.copy()
+                rms[3] = 0
             intensity = float(max(rms))
             key = (low, high)
             floor = self._noise.get(key, 0.0)
@@ -260,7 +265,8 @@ class AudioCaptureThread(QThread):
             if intensity <= threshold or (self.max_amplitude < 1 and intensity >= self.max_amplitude):
                 continue
             if use_surround and len(rms) >= 6:
-                angle = surround_angle(rms[0], rms[1], rms[2], rms[4], rms[5])
+                sl, sr = (rms[6] / 2, rms[7] / 2) if len(rms) >= 8 else (0, 0)
+                angle = surround_angle(rms[0] + sl, rms[1] + sr, rms[2], rms[4] + sl, rms[5] + sr)
             elif len(rms) >= 2:
                 angle = stereo_angle(rms[0], rms[1], self.deadzone)
             else:

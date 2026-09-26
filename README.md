@@ -100,6 +100,15 @@ Stereo capture shows left/right arcs; `?` means balanced or uncertain, not a
 sound in front of you. Three frequency bands can show cues on both sides, but
 cannot separate overlapping sounds in the same band or identify enemies.
 
+**Stereo mode** is switchable in Stereo Assist and saved with settings/profiles.
+On forces left/right cues (including a downmix of any surround input). Off allows
+the circular surround estimate when system capture provides 6 or 8 channels.
+Two-channel sources fall back to stereo; the dashboard displays the actual mode.
+Per-application capture remains two-channel. Disabling stereo mode does not
+create missing rear channels or recover positions from headphone spatial effects.
+Surround selection now uses the stream format, even if capture starts in silence;
+7.1 side channels are included and LFE alone does not trigger directional cues.
+
 - **Cue hold:** quiet detections remain visible for 200 ms by default, followed
   by a short fade. Adjust this in Stereo Assist.
 - **Centre dead zone:** ignores small channel mismatches (default 8%).

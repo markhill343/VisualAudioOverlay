@@ -180,6 +180,11 @@
         <!-- ── CUSTOMIZATION ─────────────────────────────────────── -->
         <section class="card stereo-controls">
             <h2 class="card-title">STEREO ASSIST</h2>
+            <label class="control-head" for="stereo-mode">
+                <input type="checkbox" id="stereo-mode" checked onchange="AR.setStereoOption('stereo_mode', this.checked ? 1 : 0)"> Stereo mode
+            </label>
+            <p class="device-sub">On: left/right cues. Off: use surround channels when available; stereo sources stay left/right. Per-app capture is always stereo.</p>
+            <p id="capture-mode" class="device-sub" aria-live="polite">Start the radar to check the captured source.</p>
             <p class="device-sub">Left and right arcs show sound balance. ? means balanced or uncertain, never front/back. Both arcs can appear for different frequency bands.</p>
             <div class="stereo-grid">
                 <div class="control">
