@@ -176,7 +176,10 @@ def test_stereo_switch_surround_and_silent_start():
         capture.running = False
         device = SimpleNamespace(name='Test output', recorder=MagicMock())
         device.recorder.return_value.__enter__.return_value.record.return_value = np.zeros((1200, raw_channels))
-        capture._capture_loop(device, [])
+        from audio_devices import channel_labels
+        mask = 0x63f if raw_channels == 8 else 3
+        with patch('audio_capture.endpoint_format', return_value={'mask': mask, 'labels': channel_labels(raw_channels, mask)}):
+            capture._capture_loop(device, [])
         assert devices[-1] == expected  # Silence must not permanently select stereo.
     host = SimpleNamespace(audio_settings={'stereo_mode': 1},
                            _validated_audio_param=AudioRadarApp._validated_audio_param,
@@ -184,5 +187,52 @@ def test_stereo_switch_surround_and_silent_start():
                            _restart_capture_if_active=Mock())
     AudioRadarApp.set_audio_param(host, 'stereo_mode', 0)
     host._restart_capture_if_active.assert_called_once()
+
     AudioRadarApp.set_audio_param(host, 'stereo_mode', 0)
     host._restart_capture_if_active.assert_called_once()
+
+
+def test_explicit_device_routing_and_raw_meters():
+    import json
+    from audio_devices import channel_labels
+    capture = AudioCaptureThread(sensitivity=1, freq_low=10000, freq_high=20000)
+    selected = SimpleNamespace(id='cable-id', name='Cable', isloopback=True)
+    phones = SimpleNamespace(id='phones-id', name='Headphones', isloopback=True)
+    capture.capture_device_id = selected.id
+    statuses, meters, cues = [], [], []
+    capture.status_signal.connect(statuses.append)
+    capture.channel_levels_signal.connect(lambda s: meters.append(json.loads(s)))
+    capture.audio_data_signal.connect(lambda a, i: cues.append(a))
+    with patch('audio_capture.sc.all_microphones', return_value=[phones, selected]), \
+         patch('audio_capture.sc.default_speaker', return_value=phones), \
+         patch.object(capture, '_capture_loop') as record:
+        capture._run_system_loopback()
+        record.assert_called_once_with(selected, [])
+        record.reset_mock()
+        capture.capture_device_id = 'missing'
+        capture._run_system_loopback()
+        record.assert_not_called()
+        assert 'unavailable' in statuses[-1]
+        capture.capture_device_id = phones.id
+        capture.set_mono(True)
+        capture._run_system_loopback()
+        record.assert_not_called()
+        assert 'feedback' in statuses[-1]
+    capture.channel_labels = channel_labels(8, 0x63f)
+    for channel in range(8):
+        data = np.zeros((1200, 8))
+        data[:, channel] = 0.1
+        capture._next_meter = 0
+        capture._process_chunk(data, True)
+        assert meters[-1]['db'][channel] == pytest.approx(-20)
+        assert sum(v > -60 for v in meters[-1]['db']) == 1
+    assert meters[-1]['seen'] == list(range(8))
+    assert not cues  # Meters ignore frequency and sensitivity filtering.
+    capture.channel_labels = channel_labels(6, 0x60f)
+    capture.sensitivity = 0.005
+    capture.noise_ratio = 0
+    capture.set_freq_range(20, 20000)
+    data = np.zeros((1200, 6))
+    data[:, 4] = 0.1
+    capture._process_chunk(data, True)
+    assert cues[-1] == pytest.approx(-90)  # A side-layout 5.1 stream is not rear-left.

@@ -155,6 +155,41 @@ virtual audio cable, which the app then reads. We use **VB-CABLE** for this.
 > (www.vb-cable.com). VB-CABLE is donationware - donations are welcome. See
 > [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
+## Test surround routing with S.T.A.L.K.E.R. 2
+
+The **Surround Routing Test** panel selects a playback endpoint by its Windows
+device ID and shows raw channel peaks before filtering or downmixing. An explicit
+device captures everything routed there and overrides **Program**. **Automatic**
+keeps the existing per-app/system capture. An unavailable explicit device stops
+capture instead of silently switching to another output.
+
+1. Install VB-CABLE using **Mono Output > Setup**, then reboot. Follow the
+   [VB-Audio manual](https://vb-audio.com/Cable/VBCABLE_ReferenceManual.pdf) to
+   configure the **CABLE Input speaker endpoint** as 7.1 with eight channels.
+   Leave spatial processing off on this capture endpoint.
+2. Refresh the capture-device list and select CABLE Input. Confirm it reports
+   eight channels. Keep your real MMX 300 headphones as the listening output.
+3. Enable **Mono Output**, choose your headphones, disable **Stereo mode**, and
+   start capture. The mono mix carries all captured channels to both earcups.
+4. Open **Windows Sound**, select CABLE Input under Playback, then **Configure >
+   Test**. Test each speaker separately: only its corresponding meter should
+   respond, and its sound should reach your right ear.
+5. Route S.T.A.L.K.E.R. 2 to CABLE Input, use its speaker-oriented output setting,
+   and turn its mono option off. Restart the game if the device change requires it.
+6. Turn around a steady sound in the game. Check for separate front, side and
+   rear channel activity. If only FL/FR respond, the captured game signal is stereo.
+
+Meters show peak dBFS and channels seen above -60 dBFS since Start. They reset to
+no current data when capture stops or updates cease. Activity alone does not prove
+independent surround: run the individual speaker test first. Windows channel masks
+distinguish 5.1 rear, 5.1 side and 7.1 layouts; unknown layouts are not treated as
+verified surround. Stereo mode remains available with a multichannel source.
+
+This is a routing-validation milestone, not confirmed S.T.A.L.K.E.R. 2 or DayZ
+surround compatibility. A two-channel headphone endpoint, including Windows Sonic
+output, cannot supply separate rear-channel meters. The virtual endpoint must
+receive independent game channels before the app mixes them for listening.
+
 ## Build a standalone .exe
 
 ```bash

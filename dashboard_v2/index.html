@@ -179,6 +179,34 @@
 
         <!-- ── CUSTOMIZATION ─────────────────────────────────────── -->
         <section class="card stereo-controls">
+            <h2 class="card-title">SURROUND ROUTING TEST</h2>
+            <label class="control-head" for="capture-device">Capture device</label>
+            <div class="preset-row">
+                <div class="select-wrap select-wrap--grow">
+                    <select id="capture-device" class="select" onchange="bridge.set_capture_device(this.value)"></select>
+                </div>
+                <button class="btn-toggle btn-toggle--small" onclick="bridge.refresh_capture_devices()">Refresh</button>
+            </div>
+            <p id="capture-device-status" class="device-sub" aria-live="polite"></p>
+            <p class="device-sub">An explicit device captures all sound routed to that device and overrides Program. Automatic keeps the existing per-app/system capture.</p>
+            <div id="channel-meters" class="channel-meters"></div>
+            <p id="channel-meter-status" class="device-sub">Start capture to see raw channel levels.</p>
+            <p class="device-sub">Activity is not proof of independent surround channels. Test one Windows speaker at a time; only its corresponding meter should respond. FL/FR: front, FC: centre, BL/BR: rear, SL/SR: sides, LFE: subwoofer.</p>
+            <details>
+                <summary>S.T.A.L.K.E.R. 2 compatibility test</summary>
+                <ol class="mono-steps">
+                    <li>Install VB-CABLE, then reboot. In Windows Sound, configure the <b>CABLE Input speaker endpoint</b> as 7.1, with an 8-channel default format. Keep spatial sound off on this capture endpoint.</li>
+                    <li>Refresh above and select that endpoint. It must report 8 channels. Keep your MMX headset as the real listening output.</li>
+                    <li>In Mono Output Setup choose your real headphones, then enable Mono Output. Turn off Stereo mode and start the radar.</li>
+                    <li>Use Windows Sound's Configure/Test to play each speaker separately. Check the meters and confirm every channel reaches your right ear.</li>
+                    <li>In S.T.A.L.K.E.R. 2 select CABLE Input as output, a speaker-oriented output type, and mono off. Restart the game if necessary.</li>
+                    <li>Stand beside a steady sound and turn front → right → behind → left. Independent corresponding channel activity is the pass condition. If only FL/FR respond, the game route is still stereo.</li>
+                </ol>
+                <button class="btn-toggle btn-toggle--small" onclick="bridge.open_sound_settings()">Windows Sound</button>
+                <button class="btn-toggle btn-toggle--small" onclick="AR.openMonoSetup()">Mono / VB-CABLE Setup</button>
+            </details>
+        </section>
+        <section class="card stereo-controls">
             <h2 class="card-title">STEREO ASSIST</h2>
             <label class="control-head" for="stereo-mode">
                 <input type="checkbox" id="stereo-mode" checked onchange="AR.setStereoOption('stereo_mode', this.checked ? 1 : 0)"> Stereo mode

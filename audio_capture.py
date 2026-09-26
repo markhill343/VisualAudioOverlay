@@ -2,12 +2,15 @@ import numpy as np
 import soundcard as sc
 from PyQt6.QtCore import QThread, pyqtSignal
 import time
+import json
+from audio_devices import endpoint_format, SURROUND_MASKS
 
 from direction import band_rms, stereo_angle, surround_angle
 
 class AudioCaptureThread(QThread):
     audio_data_signal = pyqtSignal(float, float)
     device_info_signal = pyqtSignal(str, int)
+    channel_levels_signal = pyqtSignal(str)
     # Human-readable capture problems (device gone, no loopback, fallbacks).
     # The app forwards these to the dashboard status line so failures are
     # visible to the user, not just printed to a console nobody sees.
@@ -28,6 +31,11 @@ class AudioCaptureThread(QThread):
         self.deadzone = 0.08
         self.noise_ratio = 1.5
         self._noise = {}
+        self.capture_device_id = None
+        self.channel_labels = None
+        self._next_meter = 0.0
+        self._meter_peak = None
+        self._seen_channels = set()
         # When target_pid is set, capture only that program (and its children)
         # via WASAPI process loopback. None = whole-system loopback (soundcard).
         self.target_pid = target_pid
@@ -71,7 +79,7 @@ class AudioCaptureThread(QThread):
         # whole system mix the way we always have.
         self._start_mono()
         try:
-            if self.target_pid:
+            if self.target_pid and not self.capture_device_id:
                 self._run_process_loopback()
             else:
                 self._run_system_loopback()
@@ -131,6 +139,7 @@ class AudioCaptureThread(QThread):
         label = self.target_name or f"PID {self.target_pid}"
         print(f"Capturing app audio: {label} (per-app, Stereo L/R)")
         self.device_info_signal.emit(f"{label} (per-app)", 2)
+        self.channel_labels = ['FL', 'FR']
         try:
             while self.running:
                 data = cap.read(self.chunk_frames)
@@ -157,7 +166,17 @@ class AudioCaptureThread(QThread):
             
             # Pick device by priority
             device = None
-            if self.mono_enabled:
+            if self.capture_device_id:
+                device = next((lb for lb in loopbacks if lb.id == self.capture_device_id), None)
+                if device is None:
+                    self.status_signal.emit("Selected capture device is unavailable; select it again. No fallback used.")
+                    return
+                if self.mono_enabled:
+                    output = sc.get_speaker(self.mono_device) if self.mono_device else sc.default_speaker()
+                    if output is None or output.id == device.id:
+                        self.status_signal.emit("Capture and Mono Output must be different devices to prevent feedback")
+                        return
+            elif self.mono_enabled:
                 # Capture the game's cable, never the headphones replaying our mix.
                 from mono_output import detect_virtual_cable
                 cable = detect_virtual_cable()
@@ -184,7 +203,7 @@ class AudioCaptureThread(QThread):
                 device = loopbacks[0]
             
             print(f"Using loopback device: {device.name}")
-            self._capture_loop(device, [] if self.mono_enabled else loopbacks)
+            self._capture_loop(device, [] if self.mono_enabled or self.capture_device_id else loopbacks)
 
         except Exception as e:
             print(f"Error in audio capture: {e}")
@@ -195,11 +214,18 @@ class AudioCaptureThread(QThread):
 
     def _capture_loop(self, device, all_loopbacks):
         try:
+            try:
+                fmt = endpoint_format(device)
+            except Exception:
+                fmt = {'mask': 0, 'labels': []}
             with device.recorder(samplerate=self.samplerate) as mic:
                 first_data = mic.record(numframes=self.chunk_frames)
                 raw_channels = first_data.shape[1]
+                self.channel_labels = fmt['labels'] if len(fmt['labels']) == raw_channels else [f'Ch {i + 1}' for i in range(raw_channels)]
                 
-                use_surround = raw_channels >= 6 and not self.force_stereo
+                use_surround = fmt['mask'] in SURROUND_MASKS and raw_channels in (6, 8) and not self.force_stereo
+                if raw_channels > 2 and fmt['mask'] not in SURROUND_MASKS:
+                    self.status_signal.emit("Unrecognised channel layout: meters available, surround direction disabled")
 
                 effective = raw_channels if use_surround else min(raw_channels, 2)
                 mode = "360° Surround" if use_surround else "Stereo L/R"
@@ -218,7 +244,8 @@ class AudioCaptureThread(QThread):
             print(f"Device '{device.name}' failed: {e}")
             if self.running:
                 self.status_signal.emit(
-                    f"Audio device '{device.name}' failed - trying another output")
+                    f"Audio device '{device.name}' failed - " +
+                    ("trying another output" if all_loopbacks else "stop and restart capture; no fallback used"))
             for lb in all_loopbacks:
                 if lb.name == device.name or "Microphone" in lb.name:
                     continue
@@ -237,6 +264,24 @@ class AudioCaptureThread(QThread):
     def _process_chunk(self, data, use_surround):
         if data.ndim != 2 or not data.size or not np.isfinite(data).all():
             return
+        # Raw meters precede downmix, frequency filtering, gain and noise gates.
+        peak = np.max(np.abs(data), axis=0)
+        self._meter_peak = peak if self._meter_peak is None or len(peak) != len(self._meter_peak) else np.maximum(peak, self._meter_peak)
+        self._seen_channels.update(int(i) for i in np.flatnonzero(peak > 0.001))
+        now = time.monotonic()
+        if now >= self._next_meter:
+            labels = self.channel_labels or [f'Ch {i + 1}' for i in range(data.shape[1])]
+            self.channel_levels_signal.emit(json.dumps({'labels': labels,
+                'db': (20 * np.log10(np.maximum(self._meter_peak, 1e-5))).tolist(),
+                'seen': sorted(self._seen_channels), 'rate': self.samplerate}))
+            self._meter_peak = None
+            self._next_meter = now + 0.1
+        if self.channel_labels and data.shape[1] >= 6:
+            canonical = ['FL', 'FR', 'FC', 'LFE', 'BL', 'BR', 'SL', 'SR']
+            if not set(self.channel_labels).issubset(canonical):
+                return  # Meters stay useful without guessing unknown positions.
+            data = np.column_stack([data[:, self.channel_labels.index(c)] if c in self.channel_labels
+                                    else np.zeros(len(data)) for c in canonical])
         if not use_surround and data.shape[1] >= 6:
             # Windows 5.1/7.1 order: FL FR C LFE BL BR [SL SR]. Omit LFE.
             left = data[:, 0] + 0.707 * (data[:, 2] + data[:, 4])

@@ -157,6 +157,8 @@ class Bridge(QObject):
     # Signals → pushed to JS
     statusChanged   = pyqtSignal(str, bool)   # (message, isActive)
     captureModeChanged = pyqtSignal(str)
+    captureDevicesChanged = pyqtSignal(str)
+    channelLevelsChanged = pyqtSignal(str)
     deviceChanged   = pyqtSignal(str)          # detected device name
     profilesChanged = pyqtSignal(str)          # full profiles dict as JSON
     monitorsChanged = pyqtSignal(str)          # list of monitors as JSON
@@ -234,6 +236,29 @@ class Bridge(QObject):
     def set_program(self, value: str):
         """Capture target chosen in the UI. 'all' (or empty) = whole-system audio."""
         self._app.set_program(None if value in ("", "all") else value)
+
+    @pyqtSlot(str)
+    def set_capture_device(self, device_id):
+        if not isinstance(device_id, str) or len(device_id) > 512:
+            return
+        app = self._app
+        selected = device_id or None
+        if selected == app.capture_device_id:
+            return
+        app.capture_device_id = selected
+        app.settings['capture_device_id'] = selected
+        app._queue_settings_save()
+        app.emit_capture_devices()
+        app._restart_capture_if_active()
+
+    @pyqtSlot()
+    def refresh_capture_devices(self):
+        self._app.emit_capture_devices()
+
+    @pyqtSlot()
+    def open_sound_settings(self):
+        import subprocess
+        subprocess.Popen(['control.exe', 'mmsys.cpl'])
 
     @pyqtSlot()
     def refresh_programs(self):
@@ -386,6 +411,7 @@ class Bridge(QObject):
 
         # Mono-output devices + VB-CABLE detection
         self._app.emit_mono_state()
+        self._app.emit_capture_devices()
 
 
 # ── Main Application ────────────────────────────────────────────────────────
@@ -403,6 +429,7 @@ class AudioRadarApp(QMainWindow):
         self.selected_program = None   # None = whole-system audio; else a program name
         self.profiles = self._load_profiles()
         self.settings = self._load_settings()
+        self.capture_device_id = self.settings.get("capture_device_id") or None
         self.radar_active = False
 
         # Live audio parameters, held here as the source of truth so they survive
@@ -526,6 +553,27 @@ class AudioRadarApp(QMainWindow):
         self.audio_thread.audio_data_signal.connect(self.on_audio_data)
         self.audio_thread.device_info_signal.connect(self.on_device_info)
         self.audio_thread.status_signal.connect(self.on_capture_status)
+        self.audio_thread.channel_levels_signal.connect(self.on_channel_levels)
+
+    def on_channel_levels(self, value):
+        if self.radar_active:
+            self.bridge.channelLevelsChanged.emit(value)
+
+    def emit_capture_devices(self):
+        import soundcard as sc
+        from audio_devices import endpoint_format
+        devices, error = [], ''
+        try:
+            for device in sc.all_speakers():
+                try:
+                    fmt = endpoint_format(device)
+                    devices.append({'id': device.id, 'name': device.name, **fmt})
+                except Exception:
+                    devices.append({'id': device.id, 'name': device.name, 'channels': 0, 'labels': []})
+        except Exception as exc:
+            error = f'Cannot list capture devices: {exc}'
+        self.bridge.captureDevicesChanged.emit(json.dumps({
+            'devices': devices, 'selected': self.capture_device_id or '', 'error': error}))
 
     def on_overlay_position_changed(self, x: int, y: int):
         self.settings["overlay_position"] = {"x": int(x), "y": int(y)}
@@ -746,6 +794,7 @@ class AudioRadarApp(QMainWindow):
             "monitor": self.selected_monitor,
             "mono_enabled": self.mono_enabled,
             "mono_device": self.mono_device or "",
+            "capture_device": self.capture_device_id or "",
             "accent_color": self.accent_color,
             "thickness": self.stroke_width,
         })
@@ -833,7 +882,8 @@ class AudioRadarApp(QMainWindow):
         """Configure the idle thread (target/mono/params are read at thread start)
         and start it. Shared by Start and by mid-session capture restarts."""
         # Resolve the capture target fresh (PIDs change between launches).
-        pid, name = self._resolve_target()
+        pid, name = (None, None) if self.capture_device_id else self._resolve_target()
+        self.audio_thread.capture_device_id = self.capture_device_id
         self.audio_thread.set_target(pid, name)
         self.audio_thread.set_mono(self.mono_enabled, self.mono_device)
         self._apply_audio_settings_to_thread()
@@ -841,7 +891,9 @@ class AudioRadarApp(QMainWindow):
         if not self.audio_thread.isRunning():
             self.audio_thread.start()
 
-        if self.selected_program and pid is None:
+        if self.capture_device_id:
+            self.bridge.statusChanged.emit("Radar active - capturing selected device", True)
+        elif self.selected_program and pid is None:
             self.bridge.statusChanged.emit(
                 f"'{self.selected_program}' has no audio - using system audio", True)
         elif pid is not None:

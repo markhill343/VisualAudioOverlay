@@ -51,6 +51,8 @@ function initBridge() {
 
             bridge.statusChanged.connect(onStatusChanged);
             bridge.deviceChanged.connect(onDeviceChanged);
+            bridge.captureDevicesChanged.connect(onCaptureDevicesChanged);
+            bridge.channelLevelsChanged.connect(onChannelLevelsChanged);
             bridge.captureModeChanged.connect(v => setText("capture-mode", v));
             bridge.profilesChanged.connect(onProfilesChanged);
             bridge.monitorsChanged.connect(onMonitorsChanged);
@@ -102,6 +104,65 @@ function onStatusChanged(message, isActive) {
     radarActive = isActive;
     setText("status-text", message);
     syncToggleUI();
+    if (!isActive) clearChannelMeters();
+}
+
+let meterLabels = "";
+let meterTimeout;
+function clearChannelMeters() {
+    clearTimeout(meterTimeout);
+    document.querySelectorAll("#channel-meters meter").forEach(el => el.value = -100);
+    document.querySelectorAll("#channel-meters output").forEach(el => el.textContent = "No current data");
+    setText("channel-meter-status", "No current channel data. Start capture or check the source.");
+}
+
+function onCaptureDevicesChanged(jsonStr) {
+    const s = JSON.parse(jsonStr);
+    const opts = [{value: "", label: "Automatic / Program capture"},
+        ...s.devices.map(d => ({value: d.id, label: `${d.name} (${d.channels || "?"}ch)`}))];
+    if (s.selected && !opts.some(o => o.value === s.selected)) {
+        opts.push({value: s.selected, label: "Saved device unavailable — select again"});
+    }
+    fillSelect("capture-device", opts, s.selected);
+    const program = document.getElementById("program-select");
+    if (program) program.disabled = !!s.selected;
+    const selected = s.devices.find(d => d.id === s.selected);
+    setText("capture-device-status", s.error || (selected
+        ? `${selected.channels} channels: ${selected.labels.join(", ")}. ${selected.rate || "?"} Hz endpoint format.`
+        : s.selected ? "Selected device is missing. Capture will not switch to another device."
+        : s.devices.some(d => d.channels >= 6) ? "Surround-capable endpoint available; select it to test."
+        : "No 5.1/7.1 endpoint found. Install and configure a virtual surround device first."));
+}
+
+function onChannelLevelsChanged(jsonStr) {
+    const s = JSON.parse(jsonStr);
+    const signature = JSON.stringify(s.labels);
+    const container = document.getElementById("channel-meters");
+    if (signature !== meterLabels) {
+        meterLabels = signature;
+        container.replaceChildren();
+        s.labels.forEach((label, i) => {
+            const cell = document.createElement("div");
+            const name = document.createElement("span");
+            name.textContent = label;
+            const meter = document.createElement("meter");
+            meter.id = `channel-meter-${i}`;
+            meter.min = -100; meter.max = 0; meter.value = -100;
+            meter.setAttribute("aria-label", `${label} level in dBFS`);
+            const value = document.createElement("output");
+            value.id = `channel-value-${i}`;
+            cell.append(name, meter, value);
+            container.appendChild(cell);
+        });
+    }
+    s.db.forEach((db, i) => {
+        document.getElementById(`channel-meter-${i}`).value = Math.max(-100, Math.min(0, db));
+        setText(`channel-value-${i}`, `${db.toFixed(0)} dBFS`);
+    });
+    const seen = s.seen.map(i => s.labels[i]).join(", ") || "none yet";
+    setText("channel-meter-status", `${s.labels.length} captured channels at ${s.rate} Hz. Seen above -60 dBFS since Start: ${seen}.`);
+    clearTimeout(meterTimeout);
+    meterTimeout = setTimeout(clearChannelMeters, 700);
 }
 
 function onDeviceChanged(label) {
@@ -375,6 +436,7 @@ window.AR = {
             // Richer profiles: also capture the target program, monitor, mono
             // state, and overlay appearance, so "CS2" restores everything.
             program: strVal("program-select", "all"),
+            capture_device: strVal("capture-device", ""),
             monitor: intVal("monitor-select", 0),
             mono_enabled: !!document.getElementById("mono-enabled")?.checked,
             mono_device: strVal("mono-output-select", ""),
@@ -482,6 +544,7 @@ window.AR = {
 // profile has them, so profiles saved by older versions still load fine and
 // simply leave those settings as they are.
 function applyProfileValues(p) {
+    if (p.capture_device != null) bridge.set_capture_device(p.capture_device);
     for (const key of ["deadzone", "noise_ratio", "hold_ms", "left_size", "left_hold_ms", "stereo_mode"]) {
         if (p[key] != null) AR.setStereoOption(key, p[key]);
     }
