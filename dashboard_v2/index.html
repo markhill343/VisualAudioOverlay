@@ -90,7 +90,7 @@
                         <div class="control">
                             <div class="control-head">
                                 <img src="icons/Volume_Max.svg" class="icon" alt="">
-                                <span>Gain / Boost</span>
+                                <span>Visual Boost</span>
                                 <span class="value" id="gain-val">1.0x</span>
                             </div>
                             <input type="range" class="slider" id="gain" min="10" max="500" value="10"
@@ -142,7 +142,7 @@
                         <div class="control">
                             <div class="control-head">
                                 <img src="icons/Volume_Max.svg" class="icon" alt="">
-                                <span>Max Amplitude</span>
+                                <span>Loud Cutoff (1 = off)</span>
                                 <span class="value" id="max-amp-val">1.00</span>
                             </div>
                             <input type="range" class="slider" id="max-amp" min="1" max="100" value="100"
@@ -162,6 +162,8 @@
                 <div class="field">
                     <div class="field-label"><span>Start / Stop</span></div>
                     <button id="btn-toggle" class="btn-toggle" onclick="AR.toggleRadar()">Start</button>
+                    <button class="btn-toggle btn-toggle--small" onclick="bridge.toggle_overlay()">Show / Hide</button>
+                    <div id="hotkey-status" class="device-sub" aria-live="polite">Ctrl+Alt+H: show / hide overlay</div>
                     <div id="status-text" class="device-sub">Radar stopped</div>
                 </div>
 
@@ -176,6 +178,66 @@
         </div>
 
         <!-- ── CUSTOMIZATION ─────────────────────────────────────── -->
+        <section class="card stereo-controls">
+            <h2 class="card-title">SURROUND ROUTING TEST</h2>
+            <label class="control-head" for="capture-device">Capture device</label>
+            <div class="preset-row">
+                <div class="select-wrap select-wrap--grow">
+                    <select id="capture-device" class="select" onchange="bridge.set_capture_device(this.value)"></select>
+                </div>
+                <button class="btn-toggle btn-toggle--small" onclick="bridge.refresh_capture_devices()">Refresh</button>
+            </div>
+            <p id="capture-device-status" class="device-sub" aria-live="polite"></p>
+            <p class="device-sub">An explicit device captures all sound routed to that device and overrides Program. Automatic keeps the existing per-app/system capture.</p>
+            <div id="channel-meters" class="channel-meters"></div>
+            <p id="channel-meter-status" class="device-sub">Start capture to see raw channel levels.</p>
+            <p class="device-sub">Activity is not proof of independent surround channels. Test one Windows speaker at a time; only its corresponding meter should respond. FL/FR: front, FC: centre, BL/BR: rear, SL/SR: sides, LFE: subwoofer.</p>
+            <details>
+                <summary>S.T.A.L.K.E.R. 2 compatibility test</summary>
+                <ol class="mono-steps">
+                    <li>Install VB-CABLE, then reboot. In Windows Sound, configure the <b>CABLE Input speaker endpoint</b> as 7.1, with an 8-channel default format. Keep spatial sound off on this capture endpoint.</li>
+                    <li>Refresh above and select that endpoint. It must report 8 channels. Keep your MMX headset as the real listening output.</li>
+                    <li>In Mono Output Setup choose your real headphones, then enable Mono Output. Turn off Stereo mode and start the radar.</li>
+                    <li>Use Windows Sound's Configure/Test to play each speaker separately. Check the meters and confirm every channel reaches your right ear.</li>
+                    <li>In S.T.A.L.K.E.R. 2 select CABLE Input as output, a speaker-oriented output type, and mono off. Restart the game if necessary.</li>
+                    <li>Stand beside a steady sound and turn front → right → behind → left. Independent corresponding channel activity is the pass condition. If only FL/FR respond, the game route is still stereo.</li>
+                </ol>
+                <button class="btn-toggle btn-toggle--small" onclick="bridge.open_sound_settings()">Windows Sound</button>
+                <button class="btn-toggle btn-toggle--small" onclick="AR.openMonoSetup()">Mono / VB-CABLE Setup</button>
+            </details>
+        </section>
+        <section class="card stereo-controls">
+            <h2 class="card-title">STEREO ASSIST</h2>
+            <label class="control-head" for="stereo-mode">
+                <input type="checkbox" id="stereo-mode" checked onchange="AR.setStereoOption('stereo_mode', this.checked ? 1 : 0)"> Stereo mode
+            </label>
+            <p class="device-sub">On: left/right cues. Off: use surround channels when available; stereo sources stay left/right. Per-app capture is always stereo.</p>
+            <p id="capture-mode" class="device-sub" aria-live="polite">Start the radar to check the captured source.</p>
+            <p class="device-sub">Left and right arcs show sound balance. ? means balanced or uncertain, never front/back. Both arcs can appear for different frequency bands.</p>
+            <div class="stereo-grid">
+                <div class="control">
+                    <label class="control-head" for="left_size">Left cue size <span id="left_size-val">1.5x</span></label>
+                    <input type="range" class="slider" id="left_size" min="100" max="300" step="10" value="150" oninput="AR.setStereoOption('left_size', this.value)">
+                </div>
+                <div class="control">
+                    <label class="control-head" for="left_hold_ms">Extra left hold <span id="left_hold_ms-val">150 ms</span></label>
+                    <input type="range" class="slider" id="left_hold_ms" min="0" max="600" step="25" value="150" oninput="AR.setStereoOption('left_hold_ms', this.value)">
+                </div>
+                <div class="control">
+                    <label class="control-head" for="deadzone">Centre dead zone <span id="deadzone-val">8%</span></label>
+                    <input type="range" class="slider" id="deadzone" min="0" max="40" value="8" oninput="AR.setStereoOption('deadzone', this.value)">
+                </div>
+                <div class="control">
+                    <label class="control-head" for="noise_ratio">Noise suppression <span id="noise_ratio-val">1.5x</span></label>
+                    <input type="range" class="slider" id="noise_ratio" min="0" max="30" value="15" oninput="AR.setStereoOption('noise_ratio', this.value)">
+                    <p class="device-sub">0 = off. Higher values hide more steady ambience, but may hide sustained cues.</p>
+                </div>
+                <div class="control">
+                    <label class="control-head" for="hold_ms">Cue hold <span id="hold_ms-val">200 ms</span></label>
+                    <input type="range" class="slider" id="hold_ms" min="100" max="600" step="25" value="200" oninput="AR.setStereoOption('hold_ms', this.value)">
+                </div>
+            </div>
+        </section>
         <section class="card card--custom">
             <h2 class="card-title">CUSTOMIZATION</h2>
 
@@ -296,8 +358,9 @@
         <div class="modal-card">
             <h2 id="mono-modal-title" class="modal-title">Mono Output Setup</h2>
             <p class="modal-intro">
-                Hear the whole game through your working ear while the radar still
-                shows direction. AudioRadar does the mono mix for you, so you turn
+                Hear left and right game sounds through your right ear: Mono Output
+                sends their combined mix to both headphone cups, including the right.
+                The radar analyses stereo before mixing. Turn
                 <b>off</b> the Windows "mono audio" setting (leaving it on hides the
                 direction the overlay needs). Follow the 5 steps below once.
             </p>

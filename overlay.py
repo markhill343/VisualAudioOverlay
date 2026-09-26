@@ -1,4 +1,5 @@
 import ctypes
+import time
 from PyQt6.QtWidgets import QWidget
 from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen
@@ -23,6 +24,7 @@ class OverlayRadar(QWidget):
         self.drag_start_window = None
         self._apply_window_flags()
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         
         self.resize(300, 300)
         
@@ -32,6 +34,10 @@ class OverlayRadar(QWidget):
         self.accent_color = QColor("#9751F2")
         self.stroke_width = 6
         self.blips = []
+        self.stereo = True
+        self.hold_ms = 200
+        self.left_size = 1.5
+        self.left_hold_ms = 150
         
         # Started/stopped with visibility (show/hideEvent) so the 30ms repaint
         # tick doesn't keep running while the overlay is hidden.
@@ -145,36 +151,39 @@ class OverlayRadar(QWidget):
         event.accept()
         
     def decay_signal(self):
-        decay_rate = 0.04
-        active_blips = []
-        for blip in self.blips:
-            blip['life'] -= decay_rate
-            if blip['life'] > 0:
-                active_blips.append(blip)
-        self.blips = active_blips
+        now = time.monotonic()
+        self.blips = [b for b in self.blips if now < b['expires']]
         self.update()
         
     def update_audio_data(self, angle, intensity):
         visual_gain = 5.0
-        clamped_intensity = min(1.0, intensity * visual_gain)
+        clamped_intensity = max(0.45, min(1.0, intensity * visual_gain))
+        if self.stereo:
+            angle = -90.0 if angle < 0 else 90.0 if angle > 0 else 0.0
+        expires = time.monotonic() + (self.hold_ms + (self.left_hold_ms if angle < 0 else 0)) / 1000 + 0.15
         
         found = False
         for blip in self.blips:
             # angle_diff wraps at +-180 so a sound directly behind the player
             # (surround: -179 vs +179) refreshes one blip instead of two.
             if angle_diff(blip['angle'], angle) < 20.0:
-                blip['life'] = max(blip['life'], clamped_intensity)
+                blip['life'] = clamped_intensity
+                blip['expires'] = expires
+                blip['angle'] = angle
                 found = True
                 break
                 
         if not found:
-            self.blips.append({'angle': angle, 'life': clamped_intensity})
+            self.blips.append({'angle': angle, 'life': clamped_intensity, 'expires': expires})
             
         self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        font = painter.font()
+        font.setPixelSize(14)
+        painter.setFont(font)
 
         if self.drag_enabled:
             # Layered windows can be hard to hit-test on fully transparent pixels.
@@ -189,10 +198,15 @@ class OverlayRadar(QWidget):
         base_pen = QPen(QColor(255, 255, 255, 30))
         base_pen.setWidth(2)
         painter.setPen(base_pen)
-        painter.drawEllipse(center, radius, radius)
+        if self.stereo:
+            painter.setPen(QColor(255, 255, 255, 150))
+            painter.drawText(QRectF(0, center.y() + 30, width, 24), Qt.AlignmentFlag.AlignCenter, "LEFT     ?     RIGHT")
+        else:
+            painter.drawEllipse(center, radius, radius)
         
         for blip in self.blips:
-            opacity = int(blip['life'] * 255)
+            fade = max(0.0, min(1.0, (blip['expires'] - time.monotonic()) / 0.15))
+            opacity = int(blip['life'] * fade * 255)
             arc_color = QColor(
                 self.accent_color.red(),
                 self.accent_color.green(),
@@ -200,12 +214,19 @@ class OverlayRadar(QWidget):
                 opacity
             )
             pen = QPen(arc_color)
-            pen.setWidth(self.stroke_width)
+            emphasis = self.left_size if blip["angle"] < 0 else 1
+            pen.setWidthF(self.stroke_width * emphasis)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             painter.setPen(pen)
+            if self.stereo and blip['angle'] == 0:
+                font.setPixelSize(26)
+                painter.setFont(font)
+                painter.drawText(QRectF(center.x() - 35, center.y() - 20, 70, 40),
+                                 Qt.AlignmentFlag.AlignCenter, "?")
+                continue
             
             center_pyqt_angle = 90 - blip['angle']
-            span_degrees = 35
+            span_degrees = 35 * emphasis
             start_deg = center_pyqt_angle - (span_degrees / 2)
             
             start_angle_16 = int(start_deg * 16)

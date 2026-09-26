@@ -94,6 +94,44 @@ Requires **Windows 10 (build 19041+)** and **Python 3.10+**.
 
 ## Mono output (single-sided listeners)
 
+### Stereo assist and right-ear listening
+
+Stereo capture shows left/right arcs; `?` means balanced or uncertain, not a
+sound in front of you. Three frequency bands can show cues on both sides, but
+cannot separate overlapping sounds in the same band or identify enemies.
+
+**Stereo mode** is switchable in Stereo Assist and saved with settings/profiles.
+On forces left/right cues (including a downmix of any surround input). Off allows
+the circular surround estimate when system capture provides 6 or 8 channels.
+Two-channel sources fall back to stereo; the dashboard displays the actual mode.
+Per-application capture remains two-channel. Disabling stereo mode does not
+create missing rear channels or recover positions from headphone spatial effects.
+Surround selection now uses the stream format, even if capture starts in silence;
+7.1 side channels are included and LFE alone does not trigger directional cues.
+
+- **Cue hold:** quiet detections remain visible for 200 ms by default, followed
+  by a short fade. Adjust this in Stereo Assist.
+- **Centre dead zone:** ignores small channel mismatches (default 8%).
+- **Left cue size / Extra left hold:** independently emphasize the side you
+  cannot hear. Defaults are 1.5x size and 150 ms extra hold; 1x and 0 ms disable
+  the emphasis. Both controls are saved with your settings and profiles.
+- **Ctrl+Alt+H:** globally show/hide the active overlay without stopping capture
+  or mono playback. Start the radar first. A Show / Hide button is also available;
+  the dashboard reports if another application already owns the shortcut.
+- **Noise suppression:** adapts to steady ambience; 0 turns it off if sustained
+  sounds are being hidden. It is a level heuristic, not footstep recognition.
+- **Visual Boost:** changes cue brightness without affecting the detection
+  threshold or loud cutoff. Lower Sensitivity to detect quieter sounds.
+- **Loud Cutoff:** 1 disables rejection. Lower values can also hide footsteps
+  mixed with loud sounds; the footstep presets still set their own cutoffs.
+
+Audio is analysed in 25 ms chunks. Actual latency also depends on Windows and
+your devices. Mono playback retains at most two queued chunks (50 ms).
+For right-ear hearing, Mono Output combines both channels into both cups, so
+the right cup receives sounds originally on either side. The radar analyses
+the stereo audio first. Use the routing steps below; keep Windows mono off.
+The app does not change Windows routing or install drivers automatically.
+
 If you are deaf or hard of hearing in one ear, you normally have to switch on the
 Windows "mono audio" setting to avoid missing sounds panned to your bad side. But
 that setting sums left and right together *before* the radar can read them, so the
@@ -116,6 +154,41 @@ virtual audio cable, which the app then reads. We use **VB-CABLE** for this.
 > Mono Output uses **VB-CABLE**, a product of **VB-Audio Software**
 > (www.vb-cable.com). VB-CABLE is donationware - donations are welcome. See
 > [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+## Test surround routing with S.T.A.L.K.E.R. 2
+
+The **Surround Routing Test** panel selects a playback endpoint by its Windows
+device ID and shows raw channel peaks before filtering or downmixing. An explicit
+device captures everything routed there and overrides **Program**. **Automatic**
+keeps the existing per-app/system capture. An unavailable explicit device stops
+capture instead of silently switching to another output.
+
+1. Install VB-CABLE using **Mono Output > Setup**, then reboot. Follow the
+   [VB-Audio manual](https://vb-audio.com/Cable/VBCABLE_ReferenceManual.pdf) to
+   configure the **CABLE Input speaker endpoint** as 7.1 with eight channels.
+   Leave spatial processing off on this capture endpoint.
+2. Refresh the capture-device list and select CABLE Input. Confirm it reports
+   eight channels. Keep your real MMX 300 headphones as the listening output.
+3. Enable **Mono Output**, choose your headphones, disable **Stereo mode**, and
+   start capture. The mono mix carries all captured channels to both earcups.
+4. Open **Windows Sound**, select CABLE Input under Playback, then **Configure >
+   Test**. Test each speaker separately: only its corresponding meter should
+   respond, and its sound should reach your right ear.
+5. Route S.T.A.L.K.E.R. 2 to CABLE Input, use its speaker-oriented output setting,
+   and turn its mono option off. Restart the game if the device change requires it.
+6. Turn around a steady sound in the game. Check for separate front, side and
+   rear channel activity. If only FL/FR respond, the captured game signal is stereo.
+
+Meters show peak dBFS and channels seen above -60 dBFS since Start. They reset to
+no current data when capture stops or updates cease. Activity alone does not prove
+independent surround: run the individual speaker test first. Windows channel masks
+distinguish 5.1 rear, 5.1 side and 7.1 layouts; unknown layouts are not treated as
+verified surround. Stereo mode remains available with a multichannel source.
+
+This is a routing-validation milestone, not confirmed S.T.A.L.K.E.R. 2 or DayZ
+surround compatibility. A two-channel headphone endpoint, including Windows Sonic
+output, cannot supply separate rear-channel meters. The virtual endpoint must
+receive independent game channels before the app mixes them for listening.
 
 ## Build a standalone .exe
 

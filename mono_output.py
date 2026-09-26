@@ -78,7 +78,7 @@ class MonoMixThread(QThread):
     failed = pyqtSignal(str)
 
     def __init__(self, device_name: str | None = None, samplerate: int = 48000,
-                 out_channels: int = 2, queue_max: int = 8):
+                 out_channels: int = 2, queue_max: int = 2):
         super().__init__()
         self.device_name = device_name or None
         self.samplerate = samplerate
@@ -108,6 +108,7 @@ class MonoMixThread(QThread):
                     return spk
             except Exception:
                 pass
+            raise RuntimeError("Selected headphones are unavailable; select an output device again")
         return sc.default_speaker()
 
     def run(self):
@@ -116,6 +117,8 @@ class MonoMixThread(QThread):
             if speaker is None:
                 self.failed.emit("no output device for mono playback")
                 return
+            if any(h in speaker.name.lower() for h in _CABLE_HINTS):
+                raise RuntimeError("Choose your real headphones for Mono Output, not the virtual cable")
             with speaker.player(samplerate=self.samplerate,
                                 channels=self.out_channels) as player:
                 while self._running:

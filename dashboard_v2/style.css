@@ -57,7 +57,7 @@ html, body {
     background: var(--bg);
     color: var(--text);
     height: 100%;
-    overflow: hidden;          /* never scroll - content fits the window */
+    overflow: auto;
 }
 
 /* Teal corner glow (top-left), matching the blurred ellipse in Figma */
@@ -77,14 +77,23 @@ body::before {
 #app {
     position: relative;
     z-index: 1;
-    height: 100vh;
+    min-height: 100vh;
     max-width: 1440px;
     margin: 0 auto;
     padding: 16px 36px 20px;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    overflow: visible;
 }
+
+.stereo-controls { flex: none; margin-bottom: 14px; }
+.channel-meters { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 12px; margin: 16px 0; }
+.channel-meters meter { display: block; width: 100%; height: 20px; }
+.channel-meters output { display: block; font-size: 12px; color: var(--text-dim); }
+details { margin-top: 14px; }
+summary { cursor: pointer; }
+.stereo-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; margin-top: 14px; }
+@media (max-width: 700px) { .stereo-grid { grid-template-columns: 1fr; } }
 
 /* ── Brand ─────────────────────────────────────────────────────── */
 .brand {

@@ -69,10 +69,10 @@ def test_stereo_hard_right_and_left():
     assert stereo_angle(0.5, 0.0) == pytest.approx(-90.0, rel=0.01)
 
 
-def test_stereo_slight_pan_is_expanded():
-    # The 0.3 exponent should push a mild 60/40 imbalance well off centre.
+def test_stereo_small_mismatch_is_neutral_and_pan_is_proportional():
+    assert stereo_angle(0.5, 0.51) == 0
     angle = stereo_angle(0.4, 0.6)
-    assert 30.0 < angle < 90.0
+    assert 10.0 < angle < 15.0
 
 
 # ── surround_angle ─────────────────────────────────────────────────────

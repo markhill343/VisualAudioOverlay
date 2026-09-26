@@ -51,6 +51,9 @@ function initBridge() {
 
             bridge.statusChanged.connect(onStatusChanged);
             bridge.deviceChanged.connect(onDeviceChanged);
+            bridge.captureDevicesChanged.connect(onCaptureDevicesChanged);
+            bridge.channelLevelsChanged.connect(onChannelLevelsChanged);
+            bridge.captureModeChanged.connect(v => setText("capture-mode", v));
             bridge.profilesChanged.connect(onProfilesChanged);
             bridge.monitorsChanged.connect(onMonitorsChanged);
             bridge.presetsChanged.connect(onPresetsChanged);
@@ -68,6 +71,7 @@ function initBridge() {
                 bridge.get_app_version(function (v) { setText("footer-version", "v" + v); });
             }
 
+            bridge.get_hotkey_status(v => setText("hotkey-status", v));
             bridge.request_initial_data();
 
             // The Program list only contains apps that are currently playing audio.
@@ -100,6 +104,65 @@ function onStatusChanged(message, isActive) {
     radarActive = isActive;
     setText("status-text", message);
     syncToggleUI();
+    if (!isActive) clearChannelMeters();
+}
+
+let meterLabels = "";
+let meterTimeout;
+function clearChannelMeters() {
+    clearTimeout(meterTimeout);
+    document.querySelectorAll("#channel-meters meter").forEach(el => el.value = -100);
+    document.querySelectorAll("#channel-meters output").forEach(el => el.textContent = "No current data");
+    setText("channel-meter-status", "No current channel data. Start capture or check the source.");
+}
+
+function onCaptureDevicesChanged(jsonStr) {
+    const s = JSON.parse(jsonStr);
+    const opts = [{value: "", label: "Automatic / Program capture"},
+        ...s.devices.map(d => ({value: d.id, label: `${d.name} (${d.channels || "?"}ch)`}))];
+    if (s.selected && !opts.some(o => o.value === s.selected)) {
+        opts.push({value: s.selected, label: "Saved device unavailable — select again"});
+    }
+    fillSelect("capture-device", opts, s.selected);
+    const program = document.getElementById("program-select");
+    if (program) program.disabled = !!s.selected;
+    const selected = s.devices.find(d => d.id === s.selected);
+    setText("capture-device-status", s.error || (selected
+        ? `${selected.channels} channels: ${selected.labels.join(", ")}. ${selected.rate || "?"} Hz endpoint format.`
+        : s.selected ? "Selected device is missing. Capture will not switch to another device."
+        : s.devices.some(d => d.channels >= 6) ? "Surround-capable endpoint available; select it to test."
+        : "No 5.1/7.1 endpoint found. Install and configure a virtual surround device first."));
+}
+
+function onChannelLevelsChanged(jsonStr) {
+    const s = JSON.parse(jsonStr);
+    const signature = JSON.stringify(s.labels);
+    const container = document.getElementById("channel-meters");
+    if (signature !== meterLabels) {
+        meterLabels = signature;
+        container.replaceChildren();
+        s.labels.forEach((label, i) => {
+            const cell = document.createElement("div");
+            const name = document.createElement("span");
+            name.textContent = label;
+            const meter = document.createElement("meter");
+            meter.id = `channel-meter-${i}`;
+            meter.min = -100; meter.max = 0; meter.value = -100;
+            meter.setAttribute("aria-label", `${label} level in dBFS`);
+            const value = document.createElement("output");
+            value.id = `channel-value-${i}`;
+            cell.append(name, meter, value);
+            container.appendChild(cell);
+        });
+    }
+    s.db.forEach((db, i) => {
+        document.getElementById(`channel-meter-${i}`).value = Math.max(-100, Math.min(0, db));
+        setText(`channel-value-${i}`, `${db.toFixed(0)} dBFS`);
+    });
+    const seen = s.seen.map(i => s.labels[i]).join(", ") || "none yet";
+    setText("channel-meter-status", `${s.labels.length} captured channels at ${s.rate} Hz. Seen above -60 dBFS since Start: ${seen}.`);
+    clearTimeout(meterTimeout);
+    meterTimeout = setTimeout(clearChannelMeters, 700);
 }
 
 function onDeviceChanged(label) {
@@ -174,6 +237,16 @@ function onAppearanceChanged(jsonStr) {
 // Keys are optional, so a caller can push a subset.
 function onAudioSettingsChanged(jsonStr) {
     const p = JSON.parse(jsonStr);
+    if (p.stereo_mode != null) document.getElementById("stereo-mode").checked = !!p.stereo_mode;
+    for (const [key, scale] of Object.entries({deadzone: 100, noise_ratio: 10, hold_ms: 1, left_size: 100, left_hold_ms: 1})) {
+        if (p[key] != null) {
+            const value = Math.round(p[key] * scale);
+            setSliderValue(key, value);
+            setFill(key, value);
+            setText(key + "-val", key === "deadzone" ? value + "%" : key.endsWith("ms") ? value + " ms" : key === "left_size" ? (value / 100).toFixed(1) + "x" : value === 0 ? "Off" : (value / 10).toFixed(1) + "x");
+        }
+    }
+    if (p.left_size != null) drawPreview();
     if (p.sensitivity != null) {
         const slider = Math.round(p.sensitivity * 10000);   // slider units = f * 10000
         setSliderValue("sensitivity", slider);
@@ -219,7 +292,7 @@ function onMonoStateChanged(jsonStr) {
     const hint = document.getElementById("mono-hint");
     if (hint) {
         const where = s.selected || (s.default ? "default device" : "default");
-        const state = s.enabled ? `On - ${where}` : "Off";
+        const state = s.enabled ? `Both channels mixed - ${where}` : "Off";
         hint.innerHTML =
             `${state} <a href="#" class="mono-setup-link" ` +
             `onclick="AR.openMonoSetup(); return false;">Setup</a>`;
@@ -353,10 +426,17 @@ window.AR = {
             freq_low: intVal("freq-low", 150),
             freq_high: intVal("freq-high", 4000),
             max_amp: intVal("max-amp", 100),
+            deadzone: intVal("deadzone", 8),
+            noise_ratio: intVal("noise_ratio", 15),
+            hold_ms: intVal("hold_ms", 200),
+            stereo_mode: document.getElementById("stereo-mode").checked ? 1 : 0,
+            left_size: intVal("left_size", 150),
+            left_hold_ms: intVal("left_hold_ms", 150),
             preset: "Custom",
             // Richer profiles: also capture the target program, monitor, mono
             // state, and overlay appearance, so "CS2" restores everything.
             program: strVal("program-select", "all"),
+            capture_device: strVal("capture-device", ""),
             monitor: intVal("monitor-select", 0),
             mono_enabled: !!document.getElementById("mono-enabled")?.checked,
             mono_device: strVal("mono-output-select", ""),
@@ -401,6 +481,14 @@ window.AR = {
     setMonoEnabled(on) {
         if (bridge.set_mono_enabled) bridge.set_mono_enabled(!!on);
         if (on) AR.openMonoSetup();      // first enable: walk them through setup
+    },
+
+    setStereoOption(key, value) {
+        const scale = {deadzone: 100, noise_ratio: 10, hold_ms: 1, left_size: 100, left_hold_ms: 1, stereo_mode: 1}[key];
+        if (!scale) return;
+        const real = Number(value) / scale;
+        onAudioSettingsChanged(JSON.stringify({[key]: real}));
+        if (bridge.set_stereo_option) bridge.set_stereo_option(key, real);
     },
 
     setMonoOutput(value) {
@@ -456,6 +544,10 @@ window.AR = {
 // profile has them, so profiles saved by older versions still load fine and
 // simply leave those settings as they are.
 function applyProfileValues(p) {
+    if (p.capture_device != null) bridge.set_capture_device(p.capture_device);
+    for (const key of ["deadzone", "noise_ratio", "hold_ms", "left_size", "left_hold_ms", "stereo_mode"]) {
+        if (p[key] != null) AR.setStereoOption(key, p[key]);
+    }
     setSliderValue("sensitivity", p.sensitivity ?? 50);
     setSliderValue("gain", p.gain ?? 10);
     setSliderValue("max-amp", p.max_amp ?? 100);
@@ -523,18 +615,16 @@ function drawPreview() {
 
     ctx.clearRect(0, 0, W, H);
 
-    // Base circle (matches overlay: white @ ~12% alpha, 2px)
-    ctx.beginPath();
-    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-    ctx.strokeStyle = "rgba(255,255,255,0.18)";
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    ctx.fillStyle = "rgba(255,255,255,0.6)";
+    ctx.font = "12px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("LEFT     ?     RIGHT", cx, cy + 30);
 
     // Sample blip arc
     const accent = document.getElementById("accent-color")?.value || "#9751F2";
     const thickness = parseInt(document.getElementById("thickness")?.value || 6);
-    const sampleAngleDeg = -35;             // up-and-to-the-right, like the mockup
-    const spanDeg = 35;
+    const sampleAngleDeg = -90;             // left-side stereo cue
+    const spanDeg = 35 * (Number(document.getElementById("left_size")?.value || 150) / 100);
     // canvas 0° = +x axis, clockwise; overlay angle 0 = up. Convert:
     const centerDeg = -90 + sampleAngleDeg;
     const start = (centerDeg - spanDeg / 2) * Math.PI / 180;
@@ -543,7 +633,7 @@ function drawPreview() {
     ctx.beginPath();
     ctx.arc(cx, cy, radius, start, end);
     ctx.strokeStyle = accent;
-    ctx.lineWidth = thickness;
+    ctx.lineWidth = thickness * (Number(document.getElementById("left_size")?.value || 150) / 100);
     ctx.lineCap = "round";
     ctx.stroke();
 }

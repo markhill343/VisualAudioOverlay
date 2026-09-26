@@ -185,5 +185,21 @@ W.onMonoStateChanged(JSON.stringify({ devices: ["Headphones", "CABLE Input"], de
     cable: "CABLE Input", enabled: true, selected: "CABLE Input" }));
 check("named device selected", mono.value === "CABLE Input", mono.value);
 
+section("stereo settings");
+W.onAudioSettingsChanged(JSON.stringify({stereo_mode: 0}));
+check("stereo toggle restores off", els['stereo-mode'].checked === false);
+W.onAudioSettingsChanged(JSON.stringify({stereo_mode: 1}));
+check("stereo toggle restores on", els['stereo-mode'].checked === true);
+W.onAudioSettingsChanged(JSON.stringify({deadzone: 0.12, noise_ratio: 0, hold_ms: 275}));
+check("dead zone restored in percent", Number(els.deadzone.value) === 12);
+check("noise suppression can be off", els['noise_ratio-val'].textContent === "Off");
+check("cue hold restored", Number(els.hold_ms.value) === 275);
+calls.length = 0;
+W.applyProfileValues({deadzone: 15, noise_ratio: 20, hold_ms: 300, left_size: 180, left_hold_ms: 250});
+check("profile applies left size", calls.some(c => c[0] === 'set_stereo_option' && c[1] === 'left_size' && c[2] === 1.8));
+check("profile applies extra left hold", calls.some(c => c[0] === 'set_stereo_option' && c[1] === 'left_hold_ms' && c[2] === 250));
+check("profile applies real dead zone", calls.some(c => c[0] === 'set_stereo_option' && c[1] === 'deadzone' && c[2] === 0.15));
+check("profile applies hold", calls.some(c => c[0] === 'set_stereo_option' && c[1] === 'hold_ms' && c[2] === 300));
+
 console.log(failed === 0 ? "\nALL PASS" : `\n${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);

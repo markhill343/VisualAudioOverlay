@@ -1,6 +1,9 @@
 import sys
 import json
 import os
+import math
+import ctypes
+from ctypes import wintypes
 
 from PyQt6.QtWidgets import QApplication, QMainWindow
 from PyQt6.QtWebEngineWidgets import QWebEngineView
@@ -87,6 +90,12 @@ SOUND_PRESETS = {
 # setSensitivity divides by 10000, setGain by 10, setMaxAmp by 100 - so keep the
 # two in step. The frequency sliders are already in real Hz.
 PROFILE_SLIDER_SCALE = {
+    "deadzone": 100,
+    "noise_ratio": 10,
+    "hold_ms": 1,
+    "stereo_mode": 1,
+    "left_size": 100,
+    "left_hold_ms": 1,
     "sensitivity": 10000,
     "gain": 10,
     "max_amp": 100,
@@ -147,6 +156,9 @@ class UpdateCheckThread(QThread):
 class Bridge(QObject):
     # Signals → pushed to JS
     statusChanged   = pyqtSignal(str, bool)   # (message, isActive)
+    captureModeChanged = pyqtSignal(str)
+    captureDevicesChanged = pyqtSignal(str)
+    channelLevelsChanged = pyqtSignal(str)
     deviceChanged   = pyqtSignal(str)          # detected device name
     profilesChanged = pyqtSignal(str)          # full profiles dict as JSON
     monitorsChanged = pyqtSignal(str)          # list of monitors as JSON
@@ -173,6 +185,14 @@ class Bridge(QObject):
         self._app.stop_radar()
 
     # ── Audio Settings ────────────────────────────────────────────────
+    @pyqtSlot()
+    def toggle_overlay(self):
+        self._app.toggle_overlay()
+
+    @pyqtSlot(result=str)
+    def get_hotkey_status(self):
+        return self._app.hotkey_status
+
     @pyqtSlot(float)
     def set_sensitivity(self, val: float):
         self._app.set_audio_param("sensitivity", val)
@@ -180,6 +200,11 @@ class Bridge(QObject):
     @pyqtSlot(float)
     def set_gain(self, val: float):
         self._app.set_audio_param("gain", val)
+
+    @pyqtSlot(str, float)
+    def set_stereo_option(self, key: str, value: float):
+        if key in ("deadzone", "noise_ratio", "hold_ms", "left_size", "left_hold_ms", "stereo_mode"):
+            self._app.set_audio_param(key, value)
 
     @pyqtSlot(int, int)
     def set_freq_range(self, low: int, high: int):
@@ -211,6 +236,29 @@ class Bridge(QObject):
     def set_program(self, value: str):
         """Capture target chosen in the UI. 'all' (or empty) = whole-system audio."""
         self._app.set_program(None if value in ("", "all") else value)
+
+    @pyqtSlot(str)
+    def set_capture_device(self, device_id):
+        if not isinstance(device_id, str) or len(device_id) > 512:
+            return
+        app = self._app
+        selected = device_id or None
+        if selected == app.capture_device_id:
+            return
+        app.capture_device_id = selected
+        app.settings['capture_device_id'] = selected
+        app._queue_settings_save()
+        app.emit_capture_devices()
+        app._restart_capture_if_active()
+
+    @pyqtSlot()
+    def refresh_capture_devices(self):
+        self._app.emit_capture_devices()
+
+    @pyqtSlot()
+    def open_sound_settings(self):
+        import subprocess
+        subprocess.Popen(['control.exe', 'mmsys.cpl'])
 
     @pyqtSlot()
     def refresh_programs(self):
@@ -363,6 +411,7 @@ class Bridge(QObject):
 
         # Mono-output devices + VB-CABLE detection
         self._app.emit_mono_state()
+        self._app.emit_capture_devices()
 
 
 # ── Main Application ────────────────────────────────────────────────────────
@@ -380,6 +429,7 @@ class AudioRadarApp(QMainWindow):
         self.selected_program = None   # None = whole-system audio; else a program name
         self.profiles = self._load_profiles()
         self.settings = self._load_settings()
+        self.capture_device_id = self.settings.get("capture_device_id") or None
         self.radar_active = False
 
         # Live audio parameters, held here as the source of truth so they survive
@@ -389,6 +439,12 @@ class AudioRadarApp(QMainWindow):
         # revert to "all frequencies" after the first stop/start. Defaults match
         # the dashboard's initial slider positions.
         self.audio_settings = {
+            "deadzone": 0.08,
+            "noise_ratio": 1.5,
+            "hold_ms": 200,
+            "stereo_mode": 1,
+            "left_size": 1.5,
+            "left_hold_ms": 150,
             "sensitivity": 0.005,   # sens slider 50 / 10000
             "gain": 1.0,            # gain slider 10 / 10
             "freq_low": 150,        # freq slider default (matches SOUND_PRESETS)
@@ -464,16 +520,26 @@ class AudioRadarApp(QMainWindow):
         self.update_thread = UpdateCheckThread()
         self.update_thread.updateFound.connect(self.bridge.updateAvailable)
         self.update_thread.start()
+        self._hotkey_hwnd = None
+        self.hotkey_status = "Ctrl+Alt+H: registering shortcut"
+        QTimer.singleShot(0, self._register_hotkey)
 
     # ── Audio Callbacks ───────────────────────────────────────────────
     def on_audio_data(self, angle: float, intensity: float):
         if self.invert_direction:
             angle = -angle
-        self.overlay.update_audio_data(angle, intensity)
+        if self.overlay.isVisible():
+            self.overlay.update_audio_data(angle, intensity)
 
     def on_device_info(self, name: str, channels: int):
+        self.overlay.stereo = channels < 6
+        self.overlay.blips.clear()
         label = f"{name}  ({channels}ch)"
         self.bridge.deviceChanged.emit(label)
+        self.bridge.captureModeChanged.emit(
+            "Stereo L/R (forced)" if self.audio_settings["stereo_mode"] else
+            "Surround channel estimate" if channels >= 6 else
+            "Stereo fallback: captured source has no surround channels")
 
     def on_capture_status(self, message: str):
         """Capture-thread problems (device lost, fallback taken) surfaced on the
@@ -487,6 +553,27 @@ class AudioRadarApp(QMainWindow):
         self.audio_thread.audio_data_signal.connect(self.on_audio_data)
         self.audio_thread.device_info_signal.connect(self.on_device_info)
         self.audio_thread.status_signal.connect(self.on_capture_status)
+        self.audio_thread.channel_levels_signal.connect(self.on_channel_levels)
+
+    def on_channel_levels(self, value):
+        if self.radar_active:
+            self.bridge.channelLevelsChanged.emit(value)
+
+    def emit_capture_devices(self):
+        import soundcard as sc
+        from audio_devices import endpoint_format
+        devices, error = [], ''
+        try:
+            for device in sc.all_speakers():
+                try:
+                    fmt = endpoint_format(device)
+                    devices.append({'id': device.id, 'name': device.name, **fmt})
+                except Exception:
+                    devices.append({'id': device.id, 'name': device.name, 'channels': 0, 'labels': []})
+        except Exception as exc:
+            error = f'Cannot list capture devices: {exc}'
+        self.bridge.captureDevicesChanged.emit(json.dumps({
+            'devices': devices, 'selected': self.capture_device_id or '', 'error': error}))
 
     def on_overlay_position_changed(self, x: int, y: int):
         self.settings["overlay_position"] = {"x": int(x), "y": int(y)}
@@ -646,6 +733,12 @@ class AudioRadarApp(QMainWindow):
         self.audio_thread.set_gain(s["gain"])
         self.audio_thread.set_freq_range(s["freq_low"], s["freq_high"])
         self.audio_thread.set_max_amplitude(s["max_amp"])
+        self.audio_thread.force_stereo = bool(s["stereo_mode"])
+        self.audio_thread.deadzone = s["deadzone"]
+        self.audio_thread.noise_ratio = s["noise_ratio"]
+        self.overlay.hold_ms = s["hold_ms"]
+        self.overlay.left_size = s["left_size"]
+        self.overlay.left_hold_ms = s["left_hold_ms"]
 
     def _load_audio_settings(self):
         """Overlay the saved audio parameters onto the defaults. settings.json is
@@ -655,12 +748,13 @@ class AudioRadarApp(QMainWindow):
         saved = self.settings.get("audio_settings")
         if not isinstance(saved, dict):
             return
-        for key, cast in (("sensitivity", float), ("gain", float),
-                          ("freq_low", int), ("freq_high", int), ("max_amp", float)):
+        for key in self.audio_settings:
             if key in saved:
                 try:
-                    self.audio_settings[key] = cast(saved[key])
-                except (TypeError, ValueError):
+                    value = self._validated_audio_param(key, saved[key])
+                    if value is not None:
+                        self.audio_settings[key] = value
+                except (TypeError, ValueError, OverflowError):
                     pass
 
     def _queue_settings_save(self):
@@ -700,6 +794,7 @@ class AudioRadarApp(QMainWindow):
             "monitor": self.selected_monitor,
             "mono_enabled": self.mono_enabled,
             "mono_device": self.mono_device or "",
+            "capture_device": self.capture_device_id or "",
             "accent_color": self.accent_color,
             "thickness": self.stroke_width,
         })
@@ -720,9 +815,35 @@ class AudioRadarApp(QMainWindow):
         """Update one live audio parameter. Stored on the app (so it survives a
         thread restart), applied to the running thread immediately, and queued for
         persistence so it also survives a restart."""
+        value = self._validated_audio_param(key, value)
+        if value is None:
+            return
+        changed = value != self.audio_settings[key]
         self.audio_settings[key] = value
         self._apply_audio_settings_to_thread()
         self._queue_settings_save()
+        if key == "stereo_mode" and changed:
+            self._restart_capture_if_active()
+
+    @staticmethod
+    def _validated_audio_param(key, value):
+        limits = {"sensitivity": (0.0001, 0.05), "gain": (1, 50),
+                  "freq_low": (20, 20000), "freq_high": (20, 20000),
+                  "max_amp": (0.01, 1), "deadzone": (0, 0.4),
+                  "noise_ratio": (0, 3), "hold_ms": (100, 600),
+                  "left_size": (1, 3), "left_hold_ms": (0, 600), "stereo_mode": (0, 1)}
+        if key not in limits:
+            return None
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(value):
+            return None
+        low, high = limits[key]
+        if key == "stereo_mode":
+            return int(value >= 0.5)
+        return max(low, min(high, value))
 
     def set_selected_preset(self, name: str):
         """Remember which dropdown entry (built-in preset or saved profile) is
@@ -750,7 +871,7 @@ class AudioRadarApp(QMainWindow):
         Every parameter is overwritten, never just the ones the preset cares about
         - see the note on SOUND_PRESETS for why a partial apply leaks."""
         p = SOUND_PRESETS.get(name, SOUND_PRESETS["All Sounds"])
-        for key in self.audio_settings:
+        for key in p:
             self.audio_settings[key] = p[key]
         self._apply_audio_settings_to_thread()
         self._queue_settings_save()
@@ -761,7 +882,8 @@ class AudioRadarApp(QMainWindow):
         """Configure the idle thread (target/mono/params are read at thread start)
         and start it. Shared by Start and by mid-session capture restarts."""
         # Resolve the capture target fresh (PIDs change between launches).
-        pid, name = self._resolve_target()
+        pid, name = (None, None) if self.capture_device_id else self._resolve_target()
+        self.audio_thread.capture_device_id = self.capture_device_id
         self.audio_thread.set_target(pid, name)
         self.audio_thread.set_mono(self.mono_enabled, self.mono_device)
         self._apply_audio_settings_to_thread()
@@ -769,7 +891,9 @@ class AudioRadarApp(QMainWindow):
         if not self.audio_thread.isRunning():
             self.audio_thread.start()
 
-        if self.selected_program and pid is None:
+        if self.capture_device_id:
+            self.bridge.statusChanged.emit("Radar active - capturing selected device", True)
+        elif self.selected_program and pid is None:
             self.bridge.statusChanged.emit(
                 f"'{self.selected_program}' has no audio - using system audio", True)
         elif pid is not None:
@@ -904,7 +1028,41 @@ class AudioRadarApp(QMainWindow):
             json.dump(self.settings, f, indent=2)
 
     # ── Lifecycle ─────────────────────────────────────────────────────
+    def _register_hotkey(self):
+        self._hotkey_hwnd = None
+        self.hotkey_status = "Global shortcut unavailable on this platform"
+        if sys.platform == "win32":
+            hwnd = wintypes.HWND(int(self.winId()))
+            # Ctrl+Alt+H, MOD_NOREPEAT: holding the keys only toggles once.
+            if ctypes.windll.user32.RegisterHotKey(hwnd, 1, 0x4003, ord("H")):
+                self._hotkey_hwnd = hwnd
+                self.hotkey_status = "Ctrl+Alt+H: show / hide overlay"
+            else:
+                self.hotkey_status = "Ctrl+Alt+H unavailable (already in use). Use Show / Hide."
+
+    def nativeEvent(self, event_type, message):
+        if sys.platform == "win32":
+            msg = wintypes.MSG.from_address(int(message))
+            if msg.message == 0x0312 and msg.wParam == 1:
+                self.toggle_overlay()
+                return True, 0
+        return False, 0
+
+    def toggle_overlay(self):
+        if not self.radar_active:
+            return
+        visible = self.overlay.isVisible()
+        self.overlay.set_drag_enabled(False)
+        self.overlay.blips.clear()
+        self.overlay.setVisible(not visible)
+        self.emit_overlay_position()
+        self.bridge.statusChanged.emit(
+            "Overlay hidden - audio continues" if visible else "Overlay visible - audio continues", True)
+
     def closeEvent(self, event):
+        if self._hotkey_hwnd is not None:
+            ctypes.windll.user32.UnregisterHotKey(self._hotkey_hwnd, 1)
+            self._hotkey_hwnd = None
         self._flush_pending_saves()
         try:
             self.stop_radar()
